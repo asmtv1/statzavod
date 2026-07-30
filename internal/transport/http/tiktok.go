@@ -276,7 +276,10 @@ func (s *Server) purgeTikTokData(w http.ResponseWriter, r *http.Request) {
 		problem(w, 404, "connection not found", "TikTok connection does not exist")
 		return
 	}
-	_, err = tx.Exec(r.Context(), `DELETE FROM sync_targets WHERE target_id=$1 AND organization_id=$2`, accountID, p.OrganizationID)
+	_, err = tx.Exec(r.Context(), `DELETE FROM sync_runs WHERE target_id IN (SELECT id FROM sync_targets WHERE target_id=$1 AND organization_id=$2)`, accountID, p.OrganizationID)
+	if err == nil {
+		_, err = tx.Exec(r.Context(), `DELETE FROM sync_targets WHERE target_id=$1 AND organization_id=$2`, accountID, p.OrganizationID)
+	}
 	if err == nil {
 		_, err = tx.Exec(r.Context(), `DELETE FROM creator_account_assignments WHERE platform_account_id=$1`, accountID)
 	}

@@ -611,7 +611,10 @@ func (s *Server) purgePlatformData(w http.ResponseWriter, r *http.Request) {
 		problem(w, http.StatusNotFound, "connection not found", "platform connection does not exist")
 		return
 	}
-	if _, err = tx.Exec(r.Context(), `DELETE FROM sync_targets WHERE target_id=$1 AND organization_id=$2`, accountID, p.OrganizationID); err == nil {
+	if _, err = tx.Exec(r.Context(), `DELETE FROM sync_runs WHERE target_id IN (SELECT id FROM sync_targets WHERE target_id=$1 AND organization_id=$2)`, accountID, p.OrganizationID); err == nil {
+		_, err = tx.Exec(r.Context(), `DELETE FROM sync_targets WHERE target_id=$1 AND organization_id=$2`, accountID, p.OrganizationID)
+	}
+	if err == nil {
 		_, err = tx.Exec(r.Context(), `DELETE FROM creator_account_assignments WHERE platform_account_id=$1`, accountID)
 	}
 	if err == nil {

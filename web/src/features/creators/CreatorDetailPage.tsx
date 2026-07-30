@@ -162,6 +162,8 @@ function CredentialVault({ creatorID }: { creatorID: string }) {
 function PlatformConnections({ creatorID }: { creatorID: string }) {
   const queryClient = useQueryClient()
   const [params] = useSearchParams()
+  const [showConnectedToast, setShowConnectedToast] = useState(false)
+  const [deleteError, setDeleteError] = useState('')
   const connections = useQuery({ queryKey: ['platform-connections', creatorID], queryFn: () => api.connections(creatorID) })
   const integrations = useQuery({ queryKey: ['integrations'], queryFn: api.integrations })
   const authorize = useMutation({
@@ -173,16 +175,32 @@ function PlatformConnections({ creatorID }: { creatorID: string }) {
     queryClient.invalidateQueries({ queryKey: ['integrations'] })
   }
   const disconnect = useMutation({ mutationFn: api.disconnectPlatform, onSuccess: refresh })
-  const purge = useMutation({ mutationFn: api.purgePlatformData, onSuccess: refresh })
+  const purge = useMutation({
+    mutationFn: api.purgePlatformData,
+    onMutate: () => setDeleteError(''),
+    onSuccess: refresh,
+    onError: (error) => setDeleteError(error instanceof Error ? error.message : 'Не удалось удалить данные платформы.'),
+  })
   const callbackPlatform = params.get('platform')?.toUpperCase()
   const result = params.get('oauth')
   const configured = new Map(integrations.data?.items.map(item => [item.id, item.configured]))
 
+  useEffect(() => {
+    if (result !== 'connected') return
+    setShowConnectedToast(true)
+    const timer = window.setTimeout(() => setShowConnectedToast(false), 6000)
+    const url = new URL(window.location.href)
+    url.searchParams.delete('platform')
+    url.searchParams.delete('oauth')
+    window.history.replaceState({}, '', url)
+    return () => window.clearTimeout(timer)
+  }, [result])
+
   return <section className={styles.connections}>
     <div className={styles.connectionHead}><div><h2>Подключения платформ</h2><p>Официальные OAuth-подключения для автоматического сбора статистики.</p></div></div>
-    {result === 'connected' ? <p className={styles.success}>{callbackPlatform ?? 'Аккаунт'} подключён.</p> : null}
     {result && result !== 'connected' ? <p className={styles.error}>Подключение {callbackPlatform ?? 'аккаунта'} не завершено: {result}.</p> : null}
     {authorize.isError ? <p className={styles.error}>{authorize.error.message}</p> : null}
+    {deleteError ? <p className={styles.error}>{deleteError}</p> : null}
     <div className={styles.platformGrid}>{platformOptions.map(platform => {
       const platformConnections = connections.data?.items.filter(item => item.platform === platform.id) ?? []
       const isConfigured = configured.get(platform.id)
@@ -195,6 +213,7 @@ function PlatformConnections({ creatorID }: { creatorID: string }) {
       <div>{connection.avatarUrl ? <img src={connection.avatarUrl} alt="" /> : null}<div><b>{connection.displayName}</b><span>{connection.platform} · @{connection.username} · {connection.status}</span><small>{connectionPermissions(connection.platform, connection.scopes)}{connection.lastSyncedAt ? ` · синхронизация ${new Date(connection.lastSyncedAt).toLocaleString('ru-RU')}` : ''}</small></div></div>
       <div className={styles.connectionActions}>{connection.profileUrl ? <a href={connection.profileUrl} target="_blank" rel="noreferrer">Открыть</a> : null}<button onClick={() => disconnect.mutate(connection.id)} disabled={disconnect.isPending}>Отключить</button><button className={styles.danger} onClick={() => { if (window.confirm(`Удалить подключение ${connection.platform}, публикации и метрики?`)) purge.mutate(connection.id) }} disabled={purge.isPending}>Удалить данные</button></div>
     </article>)}</div> : <p className={styles.empty}>Аккаунты ещё не подключены.</p>}
+    {showConnectedToast ? <div className={styles.connectionToast} role="status"><span className={styles.toastMark}>✓</span><div><b>{callbackPlatform ?? 'Аккаунт'} подключён</b><span>Доступ к данным добавлен</span></div><button type="button" aria-label="Закрыть уведомление" onClick={() => setShowConnectedToast(false)}>×</button></div> : null}
   </section>
 }
 
