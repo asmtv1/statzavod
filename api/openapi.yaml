@@ -37,7 +37,7 @@ paths:
   /platform-accounts/{id}/connection:
     delete: { summary: Disconnect a platform and revoke its stored token, responses: { '204': { description: Disconnected } } }
   /platform-accounts/{id}/data:
-    delete: { summary: Purge connected platform data, responses: { '204': { description: Data removed } } }
+    delete: { summary: Revoke and remove a platform connection with its imported data, responses: { '204': { description: Connection and data removed } } }
   /creators:
     get: { summary: List active creators, responses: { '200': { description: Creator list } } }
     post:

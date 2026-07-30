@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 	"github.com/statzavod/statzavod/internal/platforms"
 )
 
@@ -600,25 +602,52 @@ func (s *Server) revokePlatform(ctx context.Context, platform, accessToken strin
 func (s *Server) purgePlatformData(w http.ResponseWriter, r *http.Request) {
 	p := r.Context().Value(principalKey).(principal)
 	accountID := chi.URLParam(r, "id")
+
+	// Revocation is best-effort: local deletion must still succeed when the
+	// provider is unavailable or the token has already been revoked.
+	var platform string
+	var accessCipher, accessNonce []byte
+	err := s.pool.QueryRow(r.Context(), `
+		SELECT a.platform,
+			COALESCE(c.access_token_ciphertext, ''::bytea),
+			COALESCE(c.access_token_nonce, ''::bytea)
+		FROM platform_accounts a
+		LEFT JOIN oauth_connections c ON c.platform_account_id = a.id
+		WHERE a.id=$1 AND a.organization_id=$2
+	`, accountID, p.OrganizationID).Scan(&platform, &accessCipher, &accessNonce)
+	if errors.Is(err, pgx.ErrNoRows) {
+		// DELETE is idempotent. A retry after a lost 204 response is successful.
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if err != nil {
+		problem(w, http.StatusInternalServerError, "deletion failed", "could not load platform connection")
+		return
+	}
+	if s.envelope != nil && len(accessCipher) > 0 && len(accessNonce) > 0 {
+		if token, decryptErr := s.envelope.Decrypt(accessCipher, accessNonce); decryptErr == nil {
+			_ = s.revokePlatform(r.Context(), platform, string(token))
+		}
+	}
+
 	tx, err := s.pool.Begin(r.Context())
 	if err != nil {
 		problem(w, http.StatusInternalServerError, "deletion failed", "could not start transaction")
 		return
 	}
 	defer tx.Rollback(r.Context())
-	var platform string
-	if err = tx.QueryRow(r.Context(), `SELECT platform FROM platform_accounts WHERE id=$1 AND organization_id=$2`, accountID, p.OrganizationID).Scan(&platform); err != nil {
-		problem(w, http.StatusNotFound, "connection not found", "platform connection does not exist")
+
+	// Serialize deletion with updates to this account. Related account,
+	// publication and OAuth rows use cascading foreign keys (migration 00009).
+	if err = tx.QueryRow(r.Context(), `SELECT platform FROM platform_accounts WHERE id=$1 AND organization_id=$2 FOR UPDATE`, accountID, p.OrganizationID).Scan(&platform); errors.Is(err, pgx.ErrNoRows) {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	} else if err != nil {
+		problem(w, http.StatusInternalServerError, "deletion failed", "could not lock platform connection")
 		return
 	}
 	if _, err = tx.Exec(r.Context(), `DELETE FROM sync_runs WHERE target_id IN (SELECT id FROM sync_targets WHERE target_id=$1 AND organization_id=$2)`, accountID, p.OrganizationID); err == nil {
 		_, err = tx.Exec(r.Context(), `DELETE FROM sync_targets WHERE target_id=$1 AND organization_id=$2`, accountID, p.OrganizationID)
-	}
-	if err == nil {
-		_, err = tx.Exec(r.Context(), `DELETE FROM creator_account_assignments WHERE platform_account_id=$1`, accountID)
-	}
-	if err == nil {
-		_, err = tx.Exec(r.Context(), `DELETE FROM publications WHERE platform_account_id=$1 AND organization_id=$2`, accountID, p.OrganizationID)
 	}
 	if err == nil {
 		_, err = tx.Exec(r.Context(), `DELETE FROM platform_accounts WHERE id=$1 AND organization_id=$2`, accountID, p.OrganizationID)

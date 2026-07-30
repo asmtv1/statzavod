@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
-import { api, type CreatorDetail, type CreatorStatus, type Platform } from '../../shared/api/client'
+import { api, type CreatorDetail, type CreatorStatus, type Platform, type PlatformConnection } from '../../shared/api/client'
 import styles from './CreatorDetailPage.module.scss'
 import statusStyles from './CreatorStatus.module.scss'
 
@@ -33,6 +33,16 @@ function connectionPermissions(platform: Platform, scopes: string[]) {
   }
   const readable = scopes.map(scope => labels[scope]).filter((label): label is string => Boolean(label))
   return readable.length ? `Доступ: ${readable.join(' · ')}` : 'Доступ подтверждён'
+}
+
+function connectionStatus(status: string) {
+  const labels: Record<string, string> = {
+    ACTIVE: 'Подключено',
+    PAUSED: 'Синхронизация приостановлена',
+    REAUTH_REQUIRED: 'Нужно переподключить',
+    DISCONNECTED: 'Отключено',
+  }
+  return labels[status] ?? status
 }
 
 function credentialKey(section: string, field: string) {
@@ -163,6 +173,8 @@ function PlatformConnections({ creatorID }: { creatorID: string }) {
   const queryClient = useQueryClient()
   const [params] = useSearchParams()
   const [showConnectedToast, setShowConnectedToast] = useState(false)
+  const [deletedPlatform, setDeletedPlatform] = useState<Platform | null>(null)
+  const [pendingDeletion, setPendingDeletion] = useState<PlatformConnection | null>(null)
   const [deleteError, setDeleteError] = useState('')
   const connections = useQuery({ queryKey: ['platform-connections', creatorID], queryFn: () => api.connections(creatorID) })
   const integrations = useQuery({ queryKey: ['integrations'], queryFn: api.integrations })
@@ -170,15 +182,24 @@ function PlatformConnections({ creatorID }: { creatorID: string }) {
     mutationFn: (platform: Platform) => api.startAuthorization(creatorID, platform),
     onSuccess: ({ authorizationUrl }) => window.location.assign(authorizationUrl),
   })
-  const refresh = () => {
-    queryClient.invalidateQueries({ queryKey: ['platform-connections', creatorID] })
-    queryClient.invalidateQueries({ queryKey: ['integrations'] })
+  const refresh = async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['platform-connections', creatorID] }),
+      queryClient.invalidateQueries({ queryKey: ['integrations'] }),
+      queryClient.invalidateQueries({ queryKey: ['creator-analytics', creatorID] }),
+      queryClient.invalidateQueries({ queryKey: ['analytics-summary'] }),
+      queryClient.invalidateQueries({ queryKey: ['publications'] }),
+    ])
   }
-  const disconnect = useMutation({ mutationFn: api.disconnectPlatform, onSuccess: refresh })
   const purge = useMutation({
-    mutationFn: api.purgePlatformData,
+    mutationFn: (connection: PlatformConnection) => api.purgePlatformData(connection.id),
     onMutate: () => setDeleteError(''),
-    onSuccess: refresh,
+    onSuccess: async (_, connection) => {
+      setPendingDeletion(null)
+      await refresh()
+      setDeletedPlatform(connection.platform)
+      window.setTimeout(() => setDeletedPlatform(null), 6000)
+    },
     onError: (error) => setDeleteError(error instanceof Error ? error.message : 'Не удалось удалить данные платформы.'),
   })
   const callbackPlatform = params.get('platform')?.toUpperCase()
@@ -205,15 +226,24 @@ function PlatformConnections({ creatorID }: { creatorID: string }) {
       const platformConnections = connections.data?.items.filter(item => item.platform === platform.id) ?? []
       const isConfigured = configured.get(platform.id)
       return <article className={styles.platformCard} key={platform.id}>
-        <div><b>{platform.name}</b><span>{platform.hint}</span><small>{platformConnections.length ? `Подключено: ${platformConnections.length}` : isConfigured === false ? 'Нужны OAuth-реквизиты' : 'Нет подключений'}</small></div>
+        <div><b>{platform.name}</b><span>{platform.hint}</span><small>{platformConnections.length ? `Аккаунтов: ${platformConnections.length}` : isConfigured === false ? 'Нужны OAuth-реквизиты' : 'Нет подключений'}</small></div>
         <button onClick={() => authorize.mutate(platform.id)} disabled={authorize.isPending || integrations.isPending || isConfigured === false}>{authorize.isPending && authorize.variables === platform.id ? 'Переходим…' : 'Подключить'}</button>
       </article>
     })}</div>
     {connections.isPending ? <p>Загружаем подключения…</p> : connections.data?.items.length ? <div className={styles.connectionList}>{connections.data.items.map(connection => <article key={connection.id}>
-      <div>{connection.avatarUrl ? <img src={connection.avatarUrl} alt="" /> : null}<div><b>{connection.displayName}</b><span>{connection.platform} · @{connection.username} · {connection.status}</span><small>{connectionPermissions(connection.platform, connection.scopes)}{connection.lastSyncedAt ? ` · синхронизация ${new Date(connection.lastSyncedAt).toLocaleString('ru-RU')}` : ''}</small></div></div>
-      <div className={styles.connectionActions}>{connection.profileUrl ? <a href={connection.profileUrl} target="_blank" rel="noreferrer">Открыть</a> : null}<button onClick={() => disconnect.mutate(connection.id)} disabled={disconnect.isPending}>Отключить</button><button className={styles.danger} onClick={() => { if (window.confirm(`Удалить подключение ${connection.platform}, публикации и метрики?`)) purge.mutate(connection.id) }} disabled={purge.isPending}>Удалить данные</button></div>
+      <div>{connection.avatarUrl ? <img src={connection.avatarUrl} alt="" /> : null}<div><b>{connection.displayName}</b><span>{connection.platform} · @{connection.username} · {connectionStatus(connection.status)}</span><small>{connectionPermissions(connection.platform, connection.scopes)}{connection.lastSyncedAt ? ` · синхронизация ${new Date(connection.lastSyncedAt).toLocaleString('ru-RU')}` : ''}</small></div></div>
+      <div className={styles.connectionActions}>{connection.profileUrl ? <a href={connection.profileUrl} target="_blank" rel="noreferrer">Открыть</a> : null}<button className={styles.danger} onClick={() => { setDeleteError(''); setPendingDeletion(connection) }} disabled={purge.isPending}>Удалить подключение</button></div>
     </article>)}</div> : <p className={styles.empty}>Аккаунты ещё не подключены.</p>}
+    {pendingDeletion ? <div className={styles.dialogBackdrop} role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !purge.isPending) setPendingDeletion(null) }}>
+      <div className={styles.confirmDialog} role="dialog" aria-modal="true" aria-labelledby="delete-connection-title">
+        <div><span className={styles.dialogMark}>!</span><div><h3 id="delete-connection-title">Удалить подключение?</h3><p><b>{pendingDeletion.displayName}</b> · {pendingDeletion.platform}</p></div></div>
+        <p>Доступ платформы будет отозван. Аккаунт, публикации, метрики и задания синхронизации будут удалены без возможности восстановления.</p>
+        {deleteError ? <p className={styles.error}>{deleteError}</p> : null}
+        <div className={styles.dialogActions}><button type="button" onClick={() => setPendingDeletion(null)} disabled={purge.isPending}>Отмена</button><button type="button" className={styles.confirmDanger} onClick={() => purge.mutate(pendingDeletion)} disabled={purge.isPending}>{purge.isPending ? 'Удаляем…' : 'Удалить всё'}</button></div>
+      </div>
+    </div> : null}
     {showConnectedToast ? <div className={styles.connectionToast} role="status"><span className={styles.toastMark}>✓</span><div><b>{callbackPlatform ?? 'Аккаунт'} подключён</b><span>Доступ к данным добавлен</span></div><button type="button" aria-label="Закрыть уведомление" onClick={() => setShowConnectedToast(false)}>×</button></div> : null}
+    {deletedPlatform ? <div className={styles.connectionToast} role="status"><span className={styles.toastMark}>✓</span><div><b>{deletedPlatform} удалён</b><span>Подключение и собранные данные удалены</span></div><button type="button" aria-label="Закрыть уведомление" onClick={() => setDeletedPlatform(null)}>×</button></div> : null}
   </section>
 }
 
