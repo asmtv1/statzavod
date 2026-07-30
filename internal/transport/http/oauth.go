@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -179,6 +180,9 @@ func (s *Server) oauthCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	token, profile, err := s.completeOAuth(r.Context(), provider, code, string(verifier))
 	if err != nil {
+		// Keep provider details out of the browser, but retain them in the server
+		// log so an OAuth failure can be diagnosed without replaying a one-time code.
+		log.Printf("%s OAuth completion failed for creator %s: %v", provider.Name, creatorID, err)
 		redirect("provider-error")
 		return
 	}

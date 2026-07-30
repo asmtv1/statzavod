@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -313,7 +314,34 @@ func (s *Server) doTikTokJSON(req *http.Request, target any) error {
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("TikTok API returned %s", resp.Status)
 	}
-	return json.NewDecoder(resp.Body).Decode(target)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	if err != nil {
+		return fmt.Errorf("read TikTok API response: %w", err)
+	}
+	var envelope struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+			LogID   string `json:"log_id"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return fmt.Errorf("decode TikTok API response: %w", err)
+	}
+	if code := strings.ToLower(strings.TrimSpace(envelope.Error.Code)); code != "" && code != "ok" && code != "0" {
+		message := strings.TrimSpace(envelope.Error.Message)
+		if message == "" {
+			message = "unspecified provider error"
+		}
+		if logID := strings.TrimSpace(envelope.Error.LogID); logID != "" {
+			return fmt.Errorf("TikTok API error %s: %s (log_id %s)", envelope.Error.Code, message, logID)
+		}
+		return fmt.Errorf("TikTok API error %s: %s", envelope.Error.Code, message)
+	}
+	if err := json.Unmarshal(body, target); err != nil {
+		return fmt.Errorf("decode TikTok API payload: %w", err)
+	}
+	return nil
 }
 func (s *Server) revokeTikTok(ctx context.Context, accessToken string) error {
 	form := url.Values{"client_key": {s.config.TikTokClientKey}, "client_secret": {s.config.TikTokClientSecret}, "token": {accessToken}}
