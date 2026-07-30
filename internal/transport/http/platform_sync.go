@@ -48,7 +48,12 @@ func (s *Server) RunPlatformSync(ctx context.Context, limit int) (int, error) {
 		}
 		processed++
 		result, syncErr := s.syncPlatformAccount(ctx, job)
-		if finishErr := s.finishPlatformSync(ctx, job, result, syncErr); finishErr != nil && firstErr == nil {
+		// A provider can consume the whole job deadline. Always retain a short,
+		// uncancelled window to persist the final outcome and avoid RUNNING rows.
+		finishCtx, cancelFinish := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		finishErr := s.finishPlatformSync(finishCtx, job, result, syncErr)
+		cancelFinish()
+		if finishErr != nil && firstErr == nil {
 			firstErr = finishErr
 		}
 		if syncErr != nil && firstErr == nil {

@@ -164,22 +164,30 @@ func (s *Server) fetchInstagramMediaInsights(ctx context.Context, client provide
 		{"ig_reels_video_view_total_time", func(value *int64) { metrics.WatchTimeMS = value }},
 		{"ig_reels_avg_watch_time", func(value *int64) { metrics.AverageWatchTimeMS = value }},
 	}
+	names := make([]string, 0, len(targets))
+	targetByName := make(map[string]func(*int64), len(targets))
 	for _, target := range targets {
-		endpoint := strings.TrimRight(s.config.InstagramAPIBase, "/") + "/" + url.PathEscape(media.ID) + "/insights?" + url.Values{
-			"metric":       {target.name},
-			"access_token": {accessToken},
-		}.Encode()
-		var response instagramInsightResponse
-		err := client.JSON(ctx, http.MethodGet, endpoint, "", "", nil, &response)
-		if err != nil {
-			// Metric availability depends on media type and age. Authentication and
-			// permission errors remain fatal; unsupported metric errors are skipped.
-			if isProviderKind(err, providerAuth, providerPermission, providerRateLimit, providerRetryable) {
-				return metrics, err
-			}
-			continue
+		names = append(names, target.name)
+		targetByName[target.name] = target.set
+	}
+	endpoint := strings.TrimRight(s.config.InstagramAPIBase, "/") + "/" + url.PathEscape(media.ID) + "/insights?" + url.Values{
+		"metric":       {strings.Join(names, ",")},
+		"access_token": {accessToken},
+	}.Encode()
+	var response instagramInsightResponse
+	err := client.JSON(ctx, http.MethodGet, endpoint, "", "", nil, &response)
+	if err != nil {
+		// Metric availability depends on media type and age. Authentication and
+		// permission errors remain fatal; unsupported metric groups are skipped.
+		if isProviderKind(err, providerAuth, providerPermission, providerRateLimit, providerRetryable) {
+			return metrics, err
 		}
-		target.set(instagramInsightValue(response))
+		return metrics, nil
+	}
+	for index, item := range response.Data {
+		if set := targetByName[item.Name]; set != nil {
+			set(instagramInsightValue(instagramInsightResponse{Data: response.Data[index : index+1]}))
+		}
 	}
 	return metrics, nil
 }
