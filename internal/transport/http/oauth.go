@@ -653,9 +653,15 @@ func (s *Server) purgePlatformData(w http.ResponseWriter, r *http.Request) {
 		_, err = tx.Exec(r.Context(), `DELETE FROM platform_accounts WHERE id=$1 AND organization_id=$2`, accountID, p.OrganizationID)
 	}
 	if err == nil {
-		_, err = tx.Exec(r.Context(), `INSERT INTO audit_logs(organization_id,actor_id,action,entity_type,metadata) VALUES($1,$2,$3,'PLATFORM_ACCOUNT',jsonb_build_object('deletedAccount',$4))`, p.OrganizationID, p.ID, "PURGE_"+platform+"_DATA", accountID)
+		_, err = tx.Exec(r.Context(), `INSERT INTO audit_logs(organization_id,actor_id,action,entity_type,metadata) VALUES($1,$2,$3,'PLATFORM_ACCOUNT',jsonb_build_object('deletedAccount',$4::text))`, p.OrganizationID, p.ID, "PURGE_"+platform+"_DATA", accountID)
 	}
-	if err != nil || tx.Commit(r.Context()) != nil {
+	if err != nil {
+		log.Printf("platform data deletion failed for account %s: %v", accountID, err)
+		problem(w, http.StatusInternalServerError, "deletion failed", "platform data could not be removed")
+		return
+	}
+	if err = tx.Commit(r.Context()); err != nil {
+		log.Printf("platform data deletion commit failed for account %s: %v", accountID, err)
 		problem(w, http.StatusInternalServerError, "deletion failed", "platform data could not be removed")
 		return
 	}

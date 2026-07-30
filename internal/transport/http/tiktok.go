@@ -290,7 +290,7 @@ func (s *Server) purgeTikTokData(w http.ResponseWriter, r *http.Request) {
 		_, err = tx.Exec(r.Context(), `DELETE FROM platform_accounts WHERE id=$1 AND organization_id=$2`, accountID, p.OrganizationID)
 	}
 	if err == nil {
-		_, err = tx.Exec(r.Context(), `INSERT INTO audit_logs(organization_id,actor_id,action,entity_type,metadata) VALUES($1,$2,'PURGE_TIKTOK_DATA','PLATFORM_ACCOUNT',jsonb_build_object('deletedAccount',$3))`, p.OrganizationID, p.ID, accountID)
+		_, err = tx.Exec(r.Context(), `INSERT INTO audit_logs(organization_id,actor_id,action,entity_type,metadata) VALUES($1,$2,'PURGE_TIKTOK_DATA','PLATFORM_ACCOUNT',jsonb_build_object('deletedAccount',$3::text))`, p.OrganizationID, p.ID, accountID)
 	}
 	if err != nil || tx.Commit(r.Context()) != nil {
 		problem(w, 500, "deletion failed", "TikTok data could not be removed")
