@@ -23,6 +23,18 @@ const credentialSections: CredentialSection[] = [
   { id: 'VK', name: 'ВКонтакте', fields: [{ key: 'login', label: 'Логин' }, { key: 'password', label: 'Пароль', secret: true }, { key: 'phone', label: 'Телефон' }] },
 ]
 
+function connectionPermissions(platform: Platform, scopes: string[]) {
+  if (platform !== 'TIKTOK') return scopes.join(', ') || 'Разрешения уточняются'
+  const labels: Record<string, string> = {
+    'user.info.basic': 'Профиль',
+    'user.info.profile': 'Расширенные данные профиля',
+    'user.info.stats': 'Статистика аккаунта',
+    'video.list': 'Опубликованные видео',
+  }
+  const readable = scopes.map(scope => labels[scope]).filter((label): label is string => Boolean(label))
+  return readable.length ? `Доступ: ${readable.join(' · ')}` : 'Доступ подтверждён'
+}
+
 function credentialKey(section: string, field: string) {
   return `${section}:${field}`
 }
@@ -180,7 +192,7 @@ function PlatformConnections({ creatorID }: { creatorID: string }) {
       </article>
     })}</div>
     {connections.isPending ? <p>Загружаем подключения…</p> : connections.data?.items.length ? <div className={styles.connectionList}>{connections.data.items.map(connection => <article key={connection.id}>
-      <div>{connection.avatarUrl ? <img src={connection.avatarUrl} alt="" /> : null}<div><b>{connection.displayName}</b><span>{connection.platform} · @{connection.username} · {connection.status}</span><small>{connection.scopes.join(', ') || 'Разрешения уточняются'}{connection.lastSyncedAt ? ` · синхронизация ${new Date(connection.lastSyncedAt).toLocaleString('ru-RU')}` : ''}</small></div></div>
+      <div>{connection.avatarUrl ? <img src={connection.avatarUrl} alt="" /> : null}<div><b>{connection.displayName}</b><span>{connection.platform} · @{connection.username} · {connection.status}</span><small>{connectionPermissions(connection.platform, connection.scopes)}{connection.lastSyncedAt ? ` · синхронизация ${new Date(connection.lastSyncedAt).toLocaleString('ru-RU')}` : ''}</small></div></div>
       <div className={styles.connectionActions}>{connection.profileUrl ? <a href={connection.profileUrl} target="_blank" rel="noreferrer">Открыть</a> : null}<button onClick={() => disconnect.mutate(connection.id)} disabled={disconnect.isPending}>Отключить</button><button className={styles.danger} onClick={() => { if (window.confirm(`Удалить подключение ${connection.platform}, публикации и метрики?`)) purge.mutate(connection.id) }} disabled={purge.isPending}>Удалить данные</button></div>
     </article>)}</div> : <p className={styles.empty}>Аккаунты ещё не подключены.</p>}
   </section>
