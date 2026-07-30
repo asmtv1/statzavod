@@ -1,0 +1,501 @@
+.page {
+  display: grid;
+  gap: 1.25rem;
+  max-width: 76rem;
+}
+.back {
+  color: var(--gold);
+  text-decoration: none;
+  font-weight: 650;
+  font-size: 0.88rem;
+}
+.page > header {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: end;
+}
+.page > header p {
+  margin: 0;
+  color: var(--gold);
+  letter-spacing: 0.15em;
+  font-size: 0.66rem;
+  font-weight: 750;
+}
+.page h1 {
+  margin: 0.2rem 0 0.35rem;
+  letter-spacing: -0.05em;
+  font-size: clamp(2rem, 4vw, 3rem);
+}
+.headerActions {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+}
+.export,
+.telegram {
+  color: #1d1c19;
+  text-decoration: none;
+  padding: 0.67rem 0.9rem;
+  border-radius: 0.55rem;
+  font-weight: 750;
+  white-space: nowrap;
+}
+.export {
+  background: linear-gradient(135deg, #e4b667, #c98454);
+  box-shadow:
+    inset 0 1px rgb(255 245 212 / 30%),
+    0 8px 18px rgb(0 0 0 / 20%);
+}
+.telegram {
+  color: #bcefd0;
+  background: rgb(156 229 189 / 12%);
+  border: 1px solid rgb(156 229 189 / 22%);
+}
+.profile,
+.credentials,
+.table,
+.connections,
+.contacts,
+.filters,
+.kpis article {
+  background: linear-gradient(145deg, #303333 0%, #252727 55%, #202222 100%);
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  box-shadow: var(--shadow);
+}
+.profile,
+.credentials,
+.table,
+.connections,
+.contacts {
+  padding: 1.1rem;
+}
+.sectionHead,
+.connectionHead {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.sectionHead h2,
+.connectionHead h2,
+.contacts h2 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+.sectionHead p,
+.connectionHead p {
+  margin: 0.3rem 0 0;
+  color: var(--muted);
+  font-size: 0.83rem;
+  line-height: 1.45;
+}
+.secondaryButton,
+.ghostButton,
+.primaryButton,
+.credentialValue button,
+.contacts button {
+  border-radius: 0.5rem;
+  padding: 0.57rem 0.75rem;
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+.secondaryButton,
+.credentialValue button {
+  color: #e8c879;
+  background: rgb(229 184 106 / 9%);
+  border: 1px solid rgb(229 184 106 / 22%);
+}
+.ghostButton {
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--border);
+}
+.primaryButton,
+.contacts button {
+  border: 0;
+  color: #1d1c19;
+  background: linear-gradient(135deg, #e4b667, #c98454);
+  box-shadow:
+    inset 0 1px rgb(255 245 212 / 30%),
+    0 7px 16px rgb(0 0 0 / 18%);
+}
+button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.profileSummary {
+  display: grid;
+  grid-template-columns: 1.1fr 0.8fr 1.5fr;
+  gap: 1rem;
+  margin-top: 1rem;
+}
+.profileSummary > div {
+  display: grid;
+  align-content: start;
+  gap: 0.35rem;
+  padding: 0.9rem;
+  background: rgb(0 0 0 / 12%);
+  border: 1px solid rgb(244 235 218 / 8%);
+  border-radius: 0.75rem;
+}
+.profileSummary span {
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+.profileSummary strong,
+.profileSummary a {
+  color: var(--text);
+  font-size: 0.9rem;
+  text-decoration: none;
+  line-height: 1.45;
+}
+.profileSummary a {
+  color: #bcefd0;
+}
+.profileForm {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.85rem;
+  margin-top: 1rem;
+}
+.profileForm label {
+  display: grid;
+  gap: 0.4rem;
+  color: var(--text);
+  font-size: 0.8rem;
+  font-weight: 650;
+}
+.profileForm input,
+.profileForm textarea,
+.credentialRow input,
+.contacts input {
+  width: 100%;
+  color: var(--text);
+  background: #181a1a;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 0.65rem 0.7rem;
+  resize: vertical;
+}
+.wideField,
+.formActions,
+.profileForm > .error {
+  grid-column: 1/-1;
+}
+.formActions,
+.inlineActions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.55rem;
+}
+.credentialSections {
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+.credentialSection {
+  display: grid;
+  grid-template-columns: 9rem minmax(0, 1fr);
+  border: 1px solid rgb(244 235 218 / 12%);
+  border-radius: 0.85rem;
+  overflow: hidden;
+  background: rgb(0 0 0 / 10%);
+  box-shadow: inset 0 1px rgb(255 255 255 / 4%);
+}
+.credentialTitle {
+  padding: 1rem;
+  background: linear-gradient(
+    145deg,
+    rgb(229 184 106 / 13%),
+    rgb(229 184 106 / 3%)
+  );
+  border-right: 1px solid rgb(244 235 218 / 10%);
+}
+.credentialTitle h3 {
+  margin: 0;
+  font-size: 0.98rem;
+}
+.credentialTitle span {
+  display: inline-block;
+  margin-top: 0.45rem;
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+.credentialRows {
+  display: grid;
+}
+.credentialRow {
+  display: grid;
+  grid-template-columns: 9rem minmax(0, 1fr);
+  align-items: center;
+  min-height: 2.85rem;
+  border-bottom: 1px solid rgb(244 235 218 / 8%);
+}
+.credentialRow:last-child {
+  border-bottom: 0;
+}
+.credentialRow > span {
+  padding: 0.7rem 0.85rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+.credentialRow > input {
+  margin: 0.35rem 0.5rem;
+  width: calc(100% - 1rem);
+  padding: 0.52rem 0.65rem;
+}
+.credentialValue {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  min-width: 0;
+  padding: 0.45rem 0.55rem 0.45rem 0.85rem;
+}
+.credentialValue strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 0.84rem;
+  font-weight: 600;
+}
+.credentialValue button {
+  flex: none;
+  padding: 0.4rem 0.6rem;
+  font-size: 0.72rem;
+}
+.missing {
+  color: #77746e !important;
+  font-weight: 500 !important;
+}
+.filters {
+  display: flex;
+  gap: 0.75rem;
+  padding: 0.8rem;
+}
+.filters label {
+  display: grid;
+  gap: 0.3rem;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+.filters input {
+  color: var(--text);
+  background: #181a1a;
+  border: 1px solid var(--border);
+  border-radius: 0.45rem;
+  padding: 0.5rem;
+  font: inherit;
+}
+.kpis {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 0.8rem;
+}
+.kpis article {
+  padding: 1rem;
+}
+.kpis span {
+  display: block;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+.kpis strong {
+  display: block;
+  margin-top: 0.4rem;
+  font-size: 1.4rem;
+  letter-spacing: -0.04em;
+}
+.table h2 {
+  margin-top: 0;
+  font-size: 1rem;
+}
+.table article {
+  display: grid;
+  grid-template-columns: 1fr 10rem 9rem;
+  padding: 0.8rem 0;
+  border-top: 1px solid var(--border);
+  gap: 1rem;
+}
+.table article div {
+  display: grid;
+  gap: 0.2rem;
+}
+.table article span,
+.table > p {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+.error {
+  color: #ff9b8f;
+}
+.platformGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+.platformCard {
+  border: 1px solid var(--border);
+  background: rgb(0 0 0 / 12%);
+  border-radius: 0.75rem;
+  padding: 0.85rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+.platformCard > div {
+  display: grid;
+  gap: 0.2rem;
+}
+.platformCard span,
+.platformCard small {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+.platformCard button {
+  border: 1px solid rgb(156 229 189 / 22%);
+  background: rgb(156 229 189 / 12%);
+  color: #bcefd0;
+  padding: 0.55rem 0.75rem;
+  border-radius: 0.45rem;
+  font: inherit;
+  font-weight: 650;
+  cursor: pointer;
+}
+.platformCard button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.connectionList {
+  display: grid;
+  gap: 0.7rem;
+  margin-top: 1rem;
+}
+.connectionList article {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border);
+}
+.connectionList article > div:first-child {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+}
+.connectionList article > div:first-child > div {
+  display: grid;
+  gap: 0.2rem;
+}
+.connectionList img {
+  width: 2.5rem;
+  height: 2.5rem;
+  object-fit: cover;
+  border-radius: 50%;
+}
+.connectionList span,
+.connectionList small,
+.empty {
+  color: var(--muted);
+}
+.connectionList small {
+  font-size: 0.78rem;
+}
+.connectionActions {
+  display: flex;
+  gap: 0.5rem;
+}
+.connectionActions button,
+.connectionActions a {
+  border: 1px solid var(--border);
+  color: var(--text);
+  background: #242626;
+  padding: 0.45rem 0.65rem;
+  border-radius: 0.4rem;
+  cursor: pointer;
+}
+.connectionActions a {
+  color: var(--gold);
+  text-decoration: none;
+}
+.connectionActions .danger {
+  color: #ff9b8f;
+  border-color: rgb(255 155 143 / 30%);
+}
+.contacts > p {
+  color: #d5cec2;
+}
+.contacts form {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+.success {
+  color: #bcefd0;
+  font-weight: 650;
+}
+@media (max-width: 800px) {
+  .page > header,
+  .sectionHead,
+  .connectionHead,
+  .connectionList article {
+    align-items: start;
+    flex-direction: column;
+  }
+  .headerActions {
+    flex-wrap: wrap;
+  }
+  .profileSummary {
+    grid-template-columns: 1fr 1fr;
+  }
+  .profileNote {
+    grid-column: 1/-1;
+  }
+  .platformGrid {
+    grid-template-columns: 1fr;
+  }
+  .platformCard {
+    align-items: flex-start;
+  }
+  .connectionActions {
+    flex-wrap: wrap;
+  }
+  .kpis {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .table article {
+    grid-template-columns: 1fr;
+  }
+}
+@media (max-width: 600px) {
+  .profileForm {
+    grid-template-columns: 1fr;
+  }
+  .credentialSection {
+    grid-template-columns: 1fr;
+  }
+  .credentialTitle {
+    border-right: 0;
+    border-bottom: 1px solid rgb(244 235 218 / 10%);
+  }
+  .credentialRow {
+    grid-template-columns: 6.5rem minmax(0, 1fr);
+  }
+  .profileSummary {
+    grid-template-columns: 1fr;
+  }
+  .profileNote {
+    grid-column: auto;
+  }
+  .contacts form {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}

@@ -1,0 +1,227 @@
+.page {
+  min-height: 100vh;
+  padding: 36px 20px 64px;
+  background:
+    radial-gradient(ellipse 70% 42% at 82% 0%, rgb(194 132 88 / 24%), transparent 66%),
+    radial-gradient(ellipse 42% 28% at 4% 100%, rgb(107 54 44 / 24%), transparent 72%),
+    var(--page);
+}
+
+.card {
+  max-width: 980px;
+  margin: 0 auto;
+  padding: 0 64px 52px;
+  overflow: hidden;
+  background: linear-gradient(145deg, #292c2c, #1d1f20 72%);
+  border: 1px solid var(--border);
+  border-radius: 24px;
+  box-shadow: var(--shadow);
+}
+
+.header {
+  min-height: 74px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  border-bottom: 1px solid var(--border);
+}
+
+.brand {
+  color: #f4ecdf;
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: .18em;
+  text-decoration: none;
+}
+
+.language {
+  color: var(--gold);
+  font-size: 13px;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.documentNav {
+  display: flex;
+  gap: 8px;
+  margin: 0 -64px;
+  padding: 14px 64px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--border);
+  scrollbar-width: thin;
+}
+
+.documentNav a {
+  flex: 0 0 auto;
+  padding: 8px 11px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: #aaa398;
+  font-size: 13px;
+  font-weight: 650;
+  text-decoration: none;
+}
+
+.documentNav a:hover {
+  color: var(--text);
+  background: rgb(255 255 255 / 5%);
+}
+
+.documentNav .active {
+  color: #f0cb83;
+  background: rgb(229 184 106 / 10%);
+  border-color: rgb(229 184 106 / 24%);
+}
+
+.titleBlock {
+  max-width: 780px;
+  padding: 64px 0 38px;
+  border-bottom: 1px solid var(--border);
+}
+
+.kicker {
+  margin: 0 0 14px;
+  color: var(--gold);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: .16em;
+}
+
+.titleBlock h1 {
+  max-width: 780px;
+  margin: 0 0 12px;
+  color: var(--text);
+  font-size: clamp(36px, 6vw, 60px);
+  letter-spacing: -.055em;
+  line-height: 1;
+  overflow-wrap: anywhere;
+}
+
+.updated {
+  margin: 0 0 30px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.intro {
+  max-width: 760px;
+  margin: 0;
+  color: #d7d0c4;
+  font-size: 19px;
+  line-height: 1.58;
+}
+
+.notice {
+  margin: 24px 0 0;
+  padding: 18px 20px;
+  color: #d8c7aa;
+  font-size: 15px;
+  line-height: 1.6;
+  background: rgb(229 184 106 / 8%);
+  border: 1px solid rgb(229 184 106 / 20%);
+  border-radius: 12px;
+}
+
+.content {
+  max-width: 780px;
+  color: #c6bfb4;
+  font-size: 16px;
+  line-height: 1.72;
+}
+
+.content section {
+  padding: 34px 0 30px;
+  border-bottom: 1px solid rgb(244 235 218 / 10%);
+}
+
+.content h2 {
+  margin: 0 0 14px;
+  color: var(--text);
+  font-size: 21px;
+  letter-spacing: -.02em;
+  line-height: 1.35;
+}
+
+.content p {
+  margin: 0 0 14px;
+}
+
+.content p:last-child,
+.content ul:last-child {
+  margin-bottom: 0;
+}
+
+.content ul {
+  margin: 0;
+  padding-left: 23px;
+}
+
+.content li {
+  margin: 8px 0;
+  padding-left: 4px;
+}
+
+.content li::marker {
+  color: var(--gold);
+}
+
+.content a,
+.contact a {
+  color: var(--gold);
+}
+
+.contact {
+  display: grid;
+  gap: 8px;
+  margin-top: 38px;
+  padding-top: 26px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+@media (max-width: 720px) {
+  .page {
+    padding: 12px 8px 32px;
+  }
+
+  .card {
+    padding: 0 22px 36px;
+    border-radius: 18px;
+  }
+
+  .header {
+    min-height: 64px;
+  }
+
+  .documentNav {
+    margin: 0 -22px;
+    padding: 11px 22px;
+  }
+
+  .titleBlock {
+    padding: 46px 0 32px;
+  }
+
+  .titleBlock h1 {
+    font-size: clamp(29px, 8vw, 34px);
+    letter-spacing: -.045em;
+  }
+
+  .intro {
+    font-size: 17px;
+  }
+
+  .content {
+    font-size: 15px;
+  }
+
+  .content section {
+    padding: 28px 0 25px;
+  }
+
+  .content h2 {
+    font-size: 19px;
+  }
+}

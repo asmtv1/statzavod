@@ -1,0 +1,10 @@
+.env
+.env.*
+!.env.example
+!deploy/.env.production.example
+.DS_Store
+output/
+web/dist/
+web/node_modules/
+web/.playwright-cli/
+web/tsconfig.tsbuildinfo

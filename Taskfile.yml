@@ -1,0 +1,11 @@
+version: '3'
+tasks:
+  dev:
+    cmds: [docker compose -f deploy/compose.development.yml up --build]
+  db:migrate:
+    cmds: [docker compose -f deploy/compose.development.yml run --rm migrate]
+  down:
+    cmds: [docker compose -f deploy/compose.development.yml down]
+  web:build:
+    dir: web
+    cmds: [npm run build]

@@ -1,0 +1,9 @@
+.git
+.github
+.env
+.env.*
+!.env.example
+web/node_modules
+web/dist
+web/tsconfig.tsbuildinfo
+*.md

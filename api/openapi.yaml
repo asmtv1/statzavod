@@ -1,0 +1,59 @@
+openapi: 3.0.3
+info:
+  title: Statzavod API
+  version: 0.1.0
+servers: [{ url: /api/v1 }]
+paths:
+  /auth/login:
+    post:
+      summary: Create a browser session
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/LoginRequest' } } } }
+      responses: { '200': { description: Signed in }, '401': { $ref: '#/components/responses/Problem' } }
+  /auth/logout:
+    post: { summary: Revoke current session, responses: { '204': { description: Signed out } } }
+  /auth/me:
+    get: { summary: Current user, responses: { '200': { description: User }, '401': { $ref: '#/components/responses/Problem' } } }
+  /auth/accept-invitation:
+    post: { summary: Activate an invitation-only account, responses: { '201': { description: Account activated }, '400': { $ref: '#/components/responses/Problem' } } }
+  /users/invitations:
+    post: { summary: Create a one-time team invitation, responses: { '201': { description: Invitation created }, '403': { $ref: '#/components/responses/Problem' } } }
+  /creators/{id}/connections/{platform}/authorize:
+    post:
+      summary: Create a platform OAuth authorization URL
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: platform, in: path, required: true, schema: { type: string, enum: [youtube, instagram, tiktok, vk] } }
+      responses: { '200': { description: Authorization URL }, '404': { $ref: '#/components/responses/Problem' }, '503': { $ref: '#/components/responses/Problem' } }
+  /oauth/{platform}/callback:
+    get:
+      summary: Platform OAuth callback
+      parameters:
+        - { name: platform, in: path, required: true, schema: { type: string, enum: [youtube, instagram, tiktok, vk] } }
+      responses: { '302': { description: Redirect to creator connection state } }
+  /creators/{id}/connections:
+    get: { summary: List creator platform connections, responses: { '200': { description: Connections } } }
+  /integrations:
+    get: { summary: List platform configuration and connection counts, responses: { '200': { description: Integration statuses } } }
+  /platform-accounts/{id}/connection:
+    delete: { summary: Disconnect a platform and revoke its stored token, responses: { '204': { description: Disconnected } } }
+  /platform-accounts/{id}/data:
+    delete: { summary: Purge connected platform data, responses: { '204': { description: Data removed } } }
+  /creators:
+    get: { summary: List active creators, responses: { '200': { description: Creator list } } }
+    post:
+      summary: Create creator
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreatorInput' } } } }
+      responses: { '201': { description: Created }, '400': { $ref: '#/components/responses/Problem' } }
+  /analytics/summary:
+    get: { summary: Dashboard KPI summary, responses: { '200': { description: Summary } } }
+  /analytics/timeseries:
+    get: { summary: Snapshot time series, responses: { '200': { description: Series } } }
+  /sync/health:
+    get: { summary: Scheduler health, responses: { '200': { description: Health } } }
+components:
+  schemas:
+    LoginRequest: { type: object, required: [email, password], properties: { email: { type: string, format: email }, password: { type: string, format: password } } }
+    CreatorInput: { type: object, required: [firstName, lastName], properties: { firstName: { type: string }, lastName: { type: string }, middleName: { type: string }, displayName: { type: string }, internalNote: { type: string } } }
+    Problem: { type: object, required: [title, status], properties: { type: { type: string }, title: { type: string }, status: { type: integer }, detail: { type: string } } }
+  responses:
+    Problem: { description: RFC 7807-style error, content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } } }

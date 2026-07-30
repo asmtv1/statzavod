@@ -1,0 +1,40 @@
+.status {
+  width:max-content;
+  border:1px solid transparent;
+  border-radius:.42rem;
+  padding:.3rem .5rem;
+  font-size:.74rem;
+  font-weight:650;
+}
+
+.active {
+  color:#bcefd0;
+  background:rgb(156 229 189 / 11%);
+  border-color:rgb(156 229 189 / 18%);
+}
+
+.onLeave {
+  color:#f0cf8a;
+  background:rgb(229 184 106 / 12%);
+  border-color:rgb(229 184 106 / 20%);
+}
+
+.dismissed {
+  color:#e99b91;
+  background:rgb(233 132 118 / 11%);
+  border-color:rgb(233 132 118 / 19%);
+}
+
+.select {
+  width:100%;
+  color:var(--text);
+  background:#181a1a;
+  border:1px solid var(--border);
+  border-radius:.5rem;
+  padding:.65rem .7rem;
+  font:inherit;
+}
+
+.profileNote {
+  grid-column:1/-1;
+}

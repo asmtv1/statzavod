@@ -1,0 +1,76 @@
+name: statzavod
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-statzavod}
+      POSTGRES_USER: ${POSTGRES_USER:-statzavod}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+    volumes: [postgres_data:/var/lib/postgresql]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  migrate:
+    image: ${APP_IMAGE:?set APP_IMAGE}
+    command: ["migrate"]
+    environment: &app_env
+      DATABASE_URL: postgres://${POSTGRES_USER:-statzavod}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-statzavod}?sslmode=disable
+      APP_ENV: production
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://statzavod.ru}
+      CORS_ORIGIN: ${CORS_ORIGIN:-https://statzavod.ru}
+      BOOTSTRAP_EMAIL: ${BOOTSTRAP_EMAIL}
+      BOOTSTRAP_PASSWORD: ${BOOTSTRAP_PASSWORD}
+      SESSION_COOKIE_NAME: statzavod_session
+      TOKEN_ENCRYPTION_KEY: ${TOKEN_ENCRYPTION_KEY}
+      YOUTUBE_OAUTH_CLIENT_ID: ${YOUTUBE_OAUTH_CLIENT_ID}
+      YOUTUBE_OAUTH_CLIENT_SECRET: ${YOUTUBE_OAUTH_CLIENT_SECRET}
+      YOUTUBE_OAUTH_REDIRECT_URL: ${YOUTUBE_OAUTH_REDIRECT_URL:-https://statzavod.ru/api/v1/oauth/youtube/callback}
+      INSTAGRAM_OAUTH_CLIENT_ID: ${INSTAGRAM_OAUTH_CLIENT_ID}
+      INSTAGRAM_OAUTH_CLIENT_SECRET: ${INSTAGRAM_OAUTH_CLIENT_SECRET}
+      INSTAGRAM_OAUTH_REDIRECT_URL: ${INSTAGRAM_OAUTH_REDIRECT_URL:-https://statzavod.ru/api/v1/oauth/instagram/callback}
+      TIKTOK_CLIENT_KEY: ${TIKTOK_CLIENT_KEY}
+      TIKTOK_CLIENT_SECRET: ${TIKTOK_CLIENT_SECRET}
+      TIKTOK_REDIRECT_URL: ${TIKTOK_REDIRECT_URL:-https://statzavod.ru/api/v1/oauth/tiktok/callback}
+      VK_OAUTH_CLIENT_ID: ${VK_OAUTH_CLIENT_ID}
+      VK_OAUTH_CLIENT_SECRET: ${VK_OAUTH_CLIENT_SECRET}
+      VK_OAUTH_REDIRECT_URL: ${VK_OAUTH_REDIRECT_URL:-https://statzavod.ru/api/v1/oauth/vk/callback}
+      SMTP_URL: ${SMTP_URL:-}
+    depends_on: { postgres: { condition: service_healthy } }
+
+  api:
+    image: ${APP_IMAGE:?set APP_IMAGE}
+    restart: unless-stopped
+    environment: *app_env
+    depends_on: { migrate: { condition: service_completed_successfully } }
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:8080/readyz"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  worker:
+    image: ${APP_IMAGE:?set APP_IMAGE}
+    command: ["worker"]
+    restart: unless-stopped
+    environment: *app_env
+    depends_on: { migrate: { condition: service_completed_successfully } }
+
+  web:
+    image: ${WEB_IMAGE:?set WEB_IMAGE}
+    restart: unless-stopped
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:-statzavod.ru, www.statzavod.ru}
+    ports: ["80:80", "443:443"]
+    volumes: [caddy_data:/data, caddy_config:/config]
+    depends_on: { api: { condition: service_healthy } }
+
+volumes:
+  postgres_data:
+  caddy_data:
+  caddy_config:
