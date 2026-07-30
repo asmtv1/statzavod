@@ -185,7 +185,7 @@ func (s *Server) fetchInstagramMediaInsights(ctx context.Context, client provide
 }
 
 func (s *Server) upsertInstagramMedia(ctx context.Context, job platformSyncJob, media instagramMedia, metrics instagramMediaMetrics) (string, error) {
-	publishedAt, err := time.Parse(time.RFC3339, media.Timestamp)
+	publishedAt, err := parseInstagramTimestamp(media.Timestamp)
 	if err != nil {
 		return "", &providerError{Platform: "Instagram", Kind: providerSchema, Message: "media publication date is invalid"}
 	}
@@ -232,6 +232,25 @@ func (s *Server) upsertInstagramMedia(ctx context.Context, job platformSyncJob, 
 		) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'PARTIAL')
 	`, publicationID, metrics.Views, metrics.Reach, metrics.Likes, metrics.Comments, metrics.Shares, metrics.Saves, metrics.WatchTimeMS)
 	return publicationID, err
+}
+
+func parseInstagramTimestamp(value string) (time.Time, error) {
+	// Meta commonly returns offsets as +0000, while RFC3339 requires +00:00.
+	// Accept both representations, including fractional seconds.
+	layouts := []string{
+		time.RFC3339Nano,
+		"2006-01-02T15:04:05.999999999-0700",
+		"2006-01-02T15:04:05-0700",
+	}
+	var parseErr error
+	for _, layout := range layouts {
+		parsed, err := time.Parse(layout, value)
+		if err == nil {
+			return parsed, nil
+		}
+		parseErr = err
+	}
+	return time.Time{}, parseErr
 }
 
 func (s *Server) syncInstagramAccountInsights(ctx context.Context, client providerClient, accessToken, accountID string) error {

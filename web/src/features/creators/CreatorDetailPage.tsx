@@ -24,15 +24,31 @@ const credentialSections: CredentialSection[] = [
 ]
 
 function connectionPermissions(platform: Platform, scopes: string[]) {
-  if (platform !== 'TIKTOK') return scopes.join(', ') || 'Разрешения уточняются'
-  const labels: Record<string, string> = {
-    'user.info.basic': 'Профиль',
-    'user.info.profile': 'Расширенные данные профиля',
-    'user.info.stats': 'Статистика аккаунта',
-    'video.list': 'Опубликованные видео',
+  const labels: Record<Platform, Record<string, string>> = {
+    YOUTUBE: {
+      'https://www.googleapis.com/auth/youtube.readonly': 'Канал и публикации',
+      'https://www.googleapis.com/auth/yt-analytics.readonly': 'Аналитика канала',
+    },
+    INSTAGRAM: {
+      instagram_business_basic: 'Профиль и публикации',
+      instagram_business_manage_insights: 'Статистика аккаунта',
+    },
+    TIKTOK: {
+      'user.info.basic': 'Профиль',
+      'user.info.profile': 'Расширенные данные профиля',
+      'user.info.stats': 'Статистика аккаунта',
+      'video.list': 'Опубликованные видео',
+    },
+    VK: {
+      video: 'Видео и клипы',
+      stats: 'Статистика аккаунта',
+      offline: 'Долгосрочный доступ',
+    },
   }
-  const readable = scopes.map(scope => labels[scope]).filter((label): label is string => Boolean(label))
-  return readable.length ? `Доступ: ${readable.join(' · ')}` : 'Доступ подтверждён'
+  const readable = scopes.map(scope => labels[platform][scope]).filter((label): label is string => Boolean(label))
+  const unknownCount = scopes.length - readable.length
+  if (!readable.length) return scopes.length ? `Доступ подтверждён · разрешений: ${scopes.length}` : 'Доступ подтверждён'
+  return `Доступ: ${readable.join(' · ')}${unknownCount ? ` · ещё ${unknownCount}` : ''}`
 }
 
 function connectionStatus(status: string) {
