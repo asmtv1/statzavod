@@ -19,7 +19,7 @@ services:
     image: ${APP_IMAGE:?set APP_IMAGE}
     command: ["migrate"]
     environment: &app_env
-      DATABASE_URL: postgres://${POSTGRES_USER:-statzavod}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-statzavod}?sslmode=disable
+      DATABASE_URL: postgres://${POSTGRES_USER_URLENCODED:-statzavod}:${POSTGRES_PASSWORD_URLENCODED:?set POSTGRES_PASSWORD_URLENCODED}@postgres:5432/${POSTGRES_DB_URLENCODED:-statzavod}?sslmode=disable
       APP_ENV: production
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://statzavod.ru}
       CORS_ORIGIN: ${CORS_ORIGIN:-https://statzavod.ru}

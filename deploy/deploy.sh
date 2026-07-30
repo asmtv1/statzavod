@@ -6,13 +6,13 @@ release_id="${2:?release id is required}"
 healthcheck_url="${3:?healthcheck URL is required}"
 
 release_dir="$deploy_root/releases/$release_id"
-shared_env="$deploy_root/shared/.env"
+app_env="$release_dir/app.env"
 compose_file="$release_dir/compose.production.yml"
 images_env="$release_dir/images.env"
 current_link="$deploy_root/current"
 previous_dir=""
 
-for required_file in "$shared_env" "$compose_file" "$images_env"; do
+for required_file in "$app_env" "$compose_file" "$images_env"; do
   if [ ! -f "$required_file" ]; then
     echo "Required deployment file is missing: $required_file" >&2
     exit 1
@@ -28,7 +28,7 @@ compose_release() {
   shift
   docker compose \
     -p statzavod \
-    --env-file "$shared_env" \
+    --env-file "$target_dir/app.env" \
     --env-file "$target_dir/images.env" \
     -f "$target_dir/compose.production.yml" \
     "$@"
@@ -41,6 +41,7 @@ rollback() {
   compose_release "$release_dir" logs --tail=200 || true
 
   if [ -n "$previous_dir" ] &&
+     [ -f "$previous_dir/app.env" ] &&
      [ -f "$previous_dir/compose.production.yml" ] &&
      [ -f "$previous_dir/images.env" ]; then
     echo "Restoring the previous application images..." >&2

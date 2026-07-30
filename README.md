@@ -43,16 +43,10 @@ Push в `main` запускает `.github/workflows/deploy.yml`:
 ### Первичная подготовка сервера
 
 На сервере должны быть установлены Docker Engine, Docker Compose v2 и `curl`.
-Создайте каталог деплоя и production env:
-
-```bash
-sudo mkdir -p /opt/statzavod/shared
-sudo cp deploy/.env.production.example /opt/statzavod/shared/.env
-sudo chmod 600 /opt/statzavod/shared/.env
-```
-
-Заполните `/opt/statzavod/shared/.env` реальными значениями. Файл не
-перезаписывается во время деплоя.
+Создавать production `.env` на сервере вручную не требуется. GitHub Actions
+собирает его из Secrets и Variables, передаёт по SSH с правами `600` и хранит
+в каталоге конкретного релиза. При rollback возвращаются и образы, и env
+предыдущего релиза.
 
 В GitHub Environment `production` добавьте secrets:
 
@@ -62,11 +56,28 @@ sudo chmod 600 /opt/statzavod/shared/.env
 - `DEPLOY_PATH` — абсолютный путь, например `/opt/statzavod`.
 - `DEPLOY_SSH_KEY` — приватный SSH-ключ deploy-пользователя.
 - `DEPLOY_KNOWN_HOSTS` — строка сервера из заранее проверенного `known_hosts`.
+- `POSTGRES_PASSWORD`.
+- `BOOTSTRAP_PASSWORD`.
+- `TOKEN_ENCRYPTION_KEY` — результат `openssl rand -base64 32`.
+- `SMTP_URL` — необязательно.
+- `YOUTUBE_OAUTH_CLIENT_SECRET` — необязательно до подключения YouTube.
+- `INSTAGRAM_OAUTH_CLIENT_SECRET` — необязательно до подключения Instagram.
+- `TIKTOK_CLIENT_SECRET` — необязательно до подключения TikTok.
+- `VK_OAUTH_CLIENT_SECRET` — необязательно до подключения VK.
 
 В repository variables добавьте:
 
 - `DEPLOY_ENABLED` — `true` после первичной подготовки сервера и secrets.
 - `HEALTHCHECK_URL` — `https://statzavod.ru/readyz`.
+- `POSTGRES_DB` и `POSTGRES_USER` — по умолчанию `statzavod`.
+- `PUBLIC_BASE_URL` и `CORS_ORIGIN` — по умолчанию `https://statzavod.ru`.
+- `SITE_ADDRESS` — по умолчанию `statzavod.ru, www.statzavod.ru`.
+- `BOOTSTRAP_EMAIL`.
+- OAuth Client ID/Key и redirect URL нужных платформ:
+  `YOUTUBE_OAUTH_CLIENT_ID`, `YOUTUBE_OAUTH_REDIRECT_URL`,
+  `INSTAGRAM_OAUTH_CLIENT_ID`, `INSTAGRAM_OAUTH_REDIRECT_URL`,
+  `TIKTOK_CLIENT_KEY`, `TIKTOK_REDIRECT_URL`, `VK_OAUTH_CLIENT_ID`,
+  `VK_OAUTH_REDIRECT_URL`.
 
 Пока `DEPLOY_ENABLED` не установлен, push в `main` выполняет CI и публикует
 образы, но безопасно пропускает подключение к серверу. После включения запустите

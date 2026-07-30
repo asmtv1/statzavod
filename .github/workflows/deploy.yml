@@ -146,6 +146,97 @@ jobs:
             exit 1
           fi
 
+      - name: Build production environment
+        env:
+          POSTGRES_DB: ${{ vars.POSTGRES_DB }}
+          POSTGRES_USER: ${{ vars.POSTGRES_USER }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          PUBLIC_BASE_URL: ${{ vars.PUBLIC_BASE_URL }}
+          CORS_ORIGIN: ${{ vars.CORS_ORIGIN }}
+          SITE_ADDRESS: ${{ vars.SITE_ADDRESS }}
+          BOOTSTRAP_EMAIL: ${{ vars.BOOTSTRAP_EMAIL }}
+          BOOTSTRAP_PASSWORD: ${{ secrets.BOOTSTRAP_PASSWORD }}
+          TOKEN_ENCRYPTION_KEY: ${{ secrets.TOKEN_ENCRYPTION_KEY }}
+          SMTP_URL: ${{ secrets.SMTP_URL }}
+          YOUTUBE_OAUTH_CLIENT_ID: ${{ vars.YOUTUBE_OAUTH_CLIENT_ID }}
+          YOUTUBE_OAUTH_CLIENT_SECRET: ${{ secrets.YOUTUBE_OAUTH_CLIENT_SECRET }}
+          YOUTUBE_OAUTH_REDIRECT_URL: ${{ vars.YOUTUBE_OAUTH_REDIRECT_URL }}
+          INSTAGRAM_OAUTH_CLIENT_ID: ${{ vars.INSTAGRAM_OAUTH_CLIENT_ID }}
+          INSTAGRAM_OAUTH_CLIENT_SECRET: ${{ secrets.INSTAGRAM_OAUTH_CLIENT_SECRET }}
+          INSTAGRAM_OAUTH_REDIRECT_URL: ${{ vars.INSTAGRAM_OAUTH_REDIRECT_URL }}
+          TIKTOK_CLIENT_KEY: ${{ vars.TIKTOK_CLIENT_KEY }}
+          TIKTOK_CLIENT_SECRET: ${{ secrets.TIKTOK_CLIENT_SECRET }}
+          TIKTOK_REDIRECT_URL: ${{ vars.TIKTOK_REDIRECT_URL }}
+          VK_OAUTH_CLIENT_ID: ${{ vars.VK_OAUTH_CLIENT_ID }}
+          VK_OAUTH_CLIENT_SECRET: ${{ secrets.VK_OAUTH_CLIENT_SECRET }}
+          VK_OAUTH_REDIRECT_URL: ${{ vars.VK_OAUTH_REDIRECT_URL }}
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require("node:fs");
+          const env = process.env;
+          const required = [
+            "POSTGRES_PASSWORD",
+            "BOOTSTRAP_PASSWORD",
+            "TOKEN_ENCRYPTION_KEY"
+          ];
+          const missing = required.filter((name) => !env[name]);
+          if (missing.length > 0) {
+            console.error(`Missing required production secrets: ${missing.join(", ")}`);
+            process.exit(1);
+          }
+
+          const normalizedKey = env.TOKEN_ENCRYPTION_KEY
+            .replace(/-/g, "+")
+            .replace(/_/g, "/");
+          if (Buffer.from(normalizedKey, "base64").length !== 32) {
+            console.error("TOKEN_ENCRYPTION_KEY must decode to exactly 32 bytes.");
+            process.exit(1);
+          }
+
+          const values = {
+            POSTGRES_DB: env.POSTGRES_DB || "statzavod",
+            POSTGRES_USER: env.POSTGRES_USER || "statzavod",
+            POSTGRES_PASSWORD: env.POSTGRES_PASSWORD,
+            POSTGRES_DB_URLENCODED: encodeURIComponent(env.POSTGRES_DB || "statzavod"),
+            POSTGRES_USER_URLENCODED: encodeURIComponent(env.POSTGRES_USER || "statzavod"),
+            POSTGRES_PASSWORD_URLENCODED: encodeURIComponent(env.POSTGRES_PASSWORD),
+            PUBLIC_BASE_URL: env.PUBLIC_BASE_URL || "https://statzavod.ru",
+            CORS_ORIGIN: env.CORS_ORIGIN || "https://statzavod.ru",
+            SITE_ADDRESS: env.SITE_ADDRESS || "statzavod.ru, www.statzavod.ru",
+            BOOTSTRAP_EMAIL: env.BOOTSTRAP_EMAIL || "admin@example.com",
+            BOOTSTRAP_PASSWORD: env.BOOTSTRAP_PASSWORD,
+            TOKEN_ENCRYPTION_KEY: env.TOKEN_ENCRYPTION_KEY,
+            SMTP_URL: env.SMTP_URL || "",
+            YOUTUBE_OAUTH_CLIENT_ID: env.YOUTUBE_OAUTH_CLIENT_ID || "",
+            YOUTUBE_OAUTH_CLIENT_SECRET: env.YOUTUBE_OAUTH_CLIENT_SECRET || "",
+            YOUTUBE_OAUTH_REDIRECT_URL:
+              env.YOUTUBE_OAUTH_REDIRECT_URL ||
+              "https://statzavod.ru/api/v1/oauth/youtube/callback",
+            INSTAGRAM_OAUTH_CLIENT_ID: env.INSTAGRAM_OAUTH_CLIENT_ID || "",
+            INSTAGRAM_OAUTH_CLIENT_SECRET: env.INSTAGRAM_OAUTH_CLIENT_SECRET || "",
+            INSTAGRAM_OAUTH_REDIRECT_URL:
+              env.INSTAGRAM_OAUTH_REDIRECT_URL ||
+              "https://statzavod.ru/api/v1/oauth/instagram/callback",
+            TIKTOK_CLIENT_KEY: env.TIKTOK_CLIENT_KEY || "",
+            TIKTOK_CLIENT_SECRET: env.TIKTOK_CLIENT_SECRET || "",
+            TIKTOK_REDIRECT_URL:
+              env.TIKTOK_REDIRECT_URL ||
+              "https://statzavod.ru/api/v1/oauth/tiktok/callback",
+            VK_OAUTH_CLIENT_ID: env.VK_OAUTH_CLIENT_ID || "",
+            VK_OAUTH_CLIENT_SECRET: env.VK_OAUTH_CLIENT_SECRET || "",
+            VK_OAUTH_REDIRECT_URL:
+              env.VK_OAUTH_REDIRECT_URL ||
+              "https://statzavod.ru/api/v1/oauth/vk/callback"
+          };
+
+          const quote = (value) => `'${String(value).replace(/'/g, "\\'")}'`;
+          const body = Object.entries(values)
+            .map(([name, value]) => `${name}=${quote(value)}`)
+            .join("\n");
+          fs.writeFileSync("app.env", `${body}\n`, { mode: 0o600 });
+          NODE
+
       - name: Configure SSH
         env:
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
@@ -180,9 +271,9 @@ jobs:
 
           printf 'APP_IMAGE=%s\nWEB_IMAGE=%s\n' "$APP_IMAGE" "$WEB_IMAGE" > images.env
           ssh -i ~/.ssh/deploy_key -p "$port" "$remote" \
-            "mkdir -p $release_dir $DEPLOY_PATH/shared"
+            "install -d -m 700 $release_dir"
           scp -i ~/.ssh/deploy_key -P "$port" \
-            deploy/compose.production.yml deploy/deploy.sh images.env \
+            deploy/compose.production.yml deploy/deploy.sh app.env images.env \
             "$remote:$release_dir/"
 
       - name: Activate release
@@ -195,4 +286,4 @@ jobs:
             -o ServerAliveInterval=15 \
             -o ServerAliveCountMax=20 \
             "$remote" \
-            "chmod 700 $release_dir/deploy.sh && $release_dir/deploy.sh $DEPLOY_PATH ${GITHUB_SHA} $HEALTHCHECK_URL"
+            "chmod 600 $release_dir/app.env $release_dir/images.env && chmod 700 $release_dir/deploy.sh && $release_dir/deploy.sh $DEPLOY_PATH ${GITHUB_SHA} $HEALTHCHECK_URL"
