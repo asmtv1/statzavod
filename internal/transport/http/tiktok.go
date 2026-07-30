@@ -119,20 +119,14 @@ func (s *Server) exchangeTikTokCode(ctx context.Context, code string) (tiktokTok
 		return tiktokTokenData{}, err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	var out struct {
-		Data  tiktokTokenData `json:"data"`
-		Error struct {
-			Code    string `json:"code"`
-			Message string `json:"message"`
-		} `json:"error"`
-	}
+	var out tiktokTokenData
 	if err := s.doTikTokJSON(req, &out); err != nil {
 		return tiktokTokenData{}, err
 	}
-	if out.Data.AccessToken == "" {
-		return tiktokTokenData{}, fmt.Errorf("TikTok token response did not include an access token: %s", out.Error.Message)
+	if out.AccessToken == "" {
+		return tiktokTokenData{}, fmt.Errorf("TikTok token response did not include an access token")
 	}
-	return out.Data, nil
+	return out, nil
 }
 
 func (s *Server) refreshTikTokToken(ctx context.Context, refreshToken string) (tiktokTokenData, error) {
@@ -142,16 +136,14 @@ func (s *Server) refreshTikTokToken(ctx context.Context, refreshToken string) (t
 		return tiktokTokenData{}, err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	var out struct {
-		Data tiktokTokenData `json:"data"`
-	}
+	var out tiktokTokenData
 	if err := s.doTikTokJSON(req, &out); err != nil {
 		return tiktokTokenData{}, err
 	}
-	if out.Data.AccessToken == "" {
+	if out.AccessToken == "" {
 		return tiktokTokenData{}, fmt.Errorf("TikTok refresh response did not include an access token")
 	}
-	return out.Data, nil
+	return out, nil
 }
 
 func (s *Server) fetchTikTokUser(ctx context.Context, accessToken string) (tiktokUser, error) {
@@ -319,29 +311,64 @@ func (s *Server) doTikTokJSON(req *http.Request, target any) error {
 		return fmt.Errorf("read TikTok API response: %w", err)
 	}
 	var envelope struct {
-		Error struct {
-			Code    string `json:"code"`
-			Message string `json:"message"`
-			LogID   string `json:"log_id"`
-		} `json:"error"`
+		Error            json.RawMessage `json:"error"`
+		ErrorDescription string          `json:"error_description"`
+		LogID            string          `json:"log_id"`
 	}
 	if err := json.Unmarshal(body, &envelope); err != nil {
 		return fmt.Errorf("decode TikTok API response: %w", err)
 	}
-	if code := strings.ToLower(strings.TrimSpace(envelope.Error.Code)); code != "" && code != "ok" && code != "0" {
-		message := strings.TrimSpace(envelope.Error.Message)
-		if message == "" {
-			message = "unspecified provider error"
+	if code, message, logID := tikTokAPIError(envelope.Error, envelope.ErrorDescription, envelope.LogID); code != "" {
+		if logID != "" {
+			return fmt.Errorf("TikTok API error %s: %s (log_id %s)", code, message, logID)
 		}
-		if logID := strings.TrimSpace(envelope.Error.LogID); logID != "" {
-			return fmt.Errorf("TikTok API error %s: %s (log_id %s)", envelope.Error.Code, message, logID)
-		}
-		return fmt.Errorf("TikTok API error %s: %s", envelope.Error.Code, message)
+		return fmt.Errorf("TikTok API error %s: %s", code, message)
 	}
 	if err := json.Unmarshal(body, target); err != nil {
 		return fmt.Errorf("decode TikTok API payload: %w", err)
 	}
 	return nil
+}
+
+func tikTokAPIError(raw json.RawMessage, description, logID string) (string, string, string) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return "", "", ""
+	}
+	var code string
+	if err := json.Unmarshal(raw, &code); err == nil {
+		code = strings.TrimSpace(code)
+		if code == "" || strings.EqualFold(code, "ok") || code == "0" {
+			return "", "", ""
+		}
+		message := strings.TrimSpace(description)
+		if message == "" {
+			message = "unspecified provider error"
+		}
+		return code, message, strings.TrimSpace(logID)
+	}
+	var detail struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+		LogID   string `json:"log_id"`
+	}
+	if err := json.Unmarshal(raw, &detail); err != nil {
+		return "invalid_response", "TikTok returned an unrecognized error response", strings.TrimSpace(logID)
+	}
+	code = strings.TrimSpace(detail.Code)
+	if code == "" || strings.EqualFold(code, "ok") || code == "0" {
+		return "", "", ""
+	}
+	message := strings.TrimSpace(detail.Message)
+	if message == "" {
+		message = strings.TrimSpace(description)
+	}
+	if message == "" {
+		message = "unspecified provider error"
+	}
+	if strings.TrimSpace(detail.LogID) != "" {
+		logID = detail.LogID
+	}
+	return code, message, strings.TrimSpace(logID)
 }
 func (s *Server) revokeTikTok(ctx context.Context, accessToken string) error {
 	form := url.Values{"client_key": {s.config.TikTokClientKey}, "client_secret": {s.config.TikTokClientSecret}, "token": {accessToken}}
