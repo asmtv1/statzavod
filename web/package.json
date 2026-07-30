@@ -6,12 +6,12 @@
   "scripts": { "dev": "vite --host 0.0.0.0", "build": "tsc -b && vite build", "lint": "eslint ." },
   "dependencies": {
     "@tanstack/react-query": "^5.90.20",
-    "@vitejs/plugin-react": "^5.1.1",
+    "@vitejs/plugin-react": "^6.0.4",
     "echarts": "^6.0.0",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "react-router-dom": "7.18.2",
     "zustand": "^5.0.11"
   },
-  "devDependencies": { "typescript": "^5.9.3", "vite": "^7.3.1", "sass": "^1.97.2", "@types/react": "^19.2.14", "@types/react-dom": "^19.2.3" }
+  "devDependencies": { "typescript": "^7.0.2", "vite": "^8.1.5", "sass": "^1.97.2", "@types/react": "^19.2.14", "@types/react-dom": "^19.2.3" }
 }
