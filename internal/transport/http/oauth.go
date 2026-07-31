@@ -63,7 +63,7 @@ func (s *Server) oauthProviders() map[string]oauthProvider {
 			Scopes: []string{"instagram_business_basic", "instagram_business_manage_insights"},
 		},
 		"instagram-facebook": {
-			ID: "INSTAGRAM", Name: "Instagram через Facebook", ClientID: s.config.InstagramClientID, ClientSecret: s.config.InstagramClientSecret,
+			ID: "INSTAGRAM", Name: "Instagram через Facebook", ClientID: s.config.InstagramFacebookClientID, ClientSecret: s.config.InstagramFacebookClientSecret,
 			RedirectURL: s.config.InstagramFacebookRedirectURL, AuthorizeURL: strings.TrimRight(s.config.InstagramFacebookOAuthBase, "/") + "/dialog/oauth",
 			Scopes: []string{"instagram_basic", "instagram_manage_insights", "pages_show_list"}, Flow: "FACEBOOK",
 		},
@@ -139,6 +139,7 @@ func (s *Server) oauthAuthorize(w http.ResponseWriter, r *http.Request) {
 	case "INSTAGRAM":
 		if provider.Flow == "FACEBOOK" {
 			q.Set("config_id", s.config.InstagramFacebookConfigID)
+			q.Set("override_default_response_type", "true")
 		} else {
 			q.Set("scope", strings.Join(provider.Scopes, ","))
 		}
