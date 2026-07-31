@@ -90,7 +90,7 @@ func (s *Server) syncInstagramAccount(ctx context.Context, job platformSyncJob, 
 	// connected account is not their original author. They are still displayed
 	// on the collaborator's profile and included in media_count, so import them
 	// from the dedicated edge as well.
-	collaborativeMedia, err := s.fetchInstagramCollaborativeMedia(ctx, client, accessToken)
+	collaborativeMedia, err := s.fetchInstagramCollaborativeMedia(ctx, client, accessToken, account.ID)
 	if err != nil {
 		return syncResult{}, err
 	}
@@ -135,8 +135,10 @@ func (s *Server) fetchInstagramMedia(ctx context.Context, client providerClient,
 	return s.fetchInstagramMediaEdge(ctx, client, accessToken, "/me/media")
 }
 
-func (s *Server) fetchInstagramCollaborativeMedia(ctx context.Context, client providerClient, accessToken string) ([]instagramMedia, error) {
-	return s.fetchInstagramMediaEdge(ctx, client, accessToken, "/me/collaborative_media")
+func (s *Server) fetchInstagramCollaborativeMedia(ctx context.Context, client providerClient, accessToken, accountID string) ([]instagramMedia, error) {
+	// This edge is available on an IG User ID, but not on the /me alias used by
+	// the standard media edge.
+	return s.fetchInstagramMediaEdge(ctx, client, accessToken, "/"+url.PathEscape(accountID)+"/collaborative_media")
 }
 
 func (s *Server) fetchInstagramMediaEdge(ctx context.Context, client providerClient, accessToken, edge string) ([]instagramMedia, error) {

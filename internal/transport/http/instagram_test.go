@@ -94,7 +94,7 @@ func TestFetchInstagramMediaInsightsBatchesMetrics(t *testing.T) {
 
 func TestFetchInstagramCollaborativeMedia(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/me/collaborative_media" {
+		if r.URL.Path != "/account-1/collaborative_media" {
 			t.Fatalf("path = %q, want collaborative media edge", r.URL.Path)
 		}
 		if r.URL.Query().Get("access_token") != "token" {
@@ -105,7 +105,7 @@ func TestFetchInstagramCollaborativeMedia(t *testing.T) {
 	defer server.Close()
 
 	app := &Server{config: config.Config{InstagramAPIBase: server.URL}}
-	items, err := app.fetchInstagramCollaborativeMedia(context.Background(), newProviderClient("Instagram"), "token")
+	items, err := app.fetchInstagramCollaborativeMedia(context.Background(), newProviderClient("Instagram"), "token", "account-1")
 	if err != nil {
 		t.Fatalf("fetchInstagramCollaborativeMedia: %v", err)
 	}
