@@ -140,15 +140,18 @@ func (s *Server) instagramAPIForAccount(ctx context.Context, accountID string) (
 }
 
 func (s *Server) fetchInstagramAccount(ctx context.Context, client providerClient, accessToken string) (instagramAccount, error) {
-	return s.fetchInstagramAccountAt(ctx, client, accessToken, "/me")
+	return s.fetchInstagramAccountAt(ctx, client, accessToken, "/me", true)
 }
 
 func (s *Server) fetchInstagramAccountByID(ctx context.Context, client providerClient, accessToken, accountID string) (instagramAccount, error) {
-	return s.fetchInstagramAccountAt(ctx, client, accessToken, "/"+url.PathEscape(accountID))
+	return s.fetchInstagramAccountAt(ctx, client, accessToken, "/"+url.PathEscape(accountID), false)
 }
 
-func (s *Server) fetchInstagramAccountAt(ctx context.Context, client providerClient, accessToken, path string) (instagramAccount, error) {
-	fields := "id,user_id,username,name,account_type,profile_picture_url,followers_count,follows_count,media_count"
+func (s *Server) fetchInstagramAccountAt(ctx context.Context, client providerClient, accessToken, path string, includeInstagramLoginUserID bool) (instagramAccount, error) {
+	fields := "id,username,name,account_type,profile_picture_url,followers_count,follows_count,media_count"
+	if includeInstagramLoginUserID {
+		fields = "user_id," + fields
+	}
 	endpoint := strings.TrimRight(s.config.InstagramAPIBase, "/") + path + "?" + url.Values{
 		"fields":       {fields},
 		"access_token": {accessToken},
