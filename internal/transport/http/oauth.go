@@ -140,6 +140,7 @@ func (s *Server) oauthAuthorize(w http.ResponseWriter, r *http.Request) {
 		if provider.Flow == "FACEBOOK" {
 			q.Set("config_id", s.config.InstagramFacebookConfigID)
 			q.Set("override_default_response_type", "true")
+			q.Set("auth_type", "rerequest")
 		} else {
 			q.Set("scope", strings.Join(provider.Scopes, ","))
 		}
@@ -262,8 +263,37 @@ func (s *Server) completeInstagramFacebookOAuth(ctx context.Context, provider oa
 	if err := doJSON(ctx, http.MethodGet, longURL, "", &longToken); err == nil && longToken.AccessToken != "" {
 		token = longToken
 	}
+	var permissions struct {
+		Data []struct {
+			Permission string `json:"permission"`
+			Status     string `json:"status"`
+		} `json:"data"`
+	}
+	permissionsURL := strings.TrimRight(s.config.InstagramFacebookGraphAPIBase, "/") + "/me/permissions?" + url.Values{
+		"access_token": {token.AccessToken},
+	}.Encode()
+	granted := make(map[string]bool)
+	if err := doJSON(ctx, http.MethodGet, permissionsURL, "", &permissions); err != nil {
+		return oauthToken{}, platformProfile{}, fmt.Errorf("Facebook granted permissions are unavailable")
+	}
+	for _, permission := range permissions.Data {
+		if permission.Status == "granted" {
+			granted[permission.Permission] = true
+		}
+	}
+	missing := make([]string, 0)
+	for _, permission := range provider.Scopes {
+		if !granted[permission] {
+			missing = append(missing, permission)
+		}
+	}
+	if len(missing) > 0 {
+		return oauthToken{}, platformProfile{}, fmt.Errorf("Facebook permissions were not granted: %s", strings.Join(missing, ", "))
+	}
 	var pages struct {
 		Data []struct {
+			ID                       string `json:"id"`
+			Name                     string `json:"name"`
 			InstagramBusinessAccount struct {
 				ID                string `json:"id"`
 				Username          string `json:"username"`
@@ -273,7 +303,7 @@ func (s *Server) completeInstagramFacebookOAuth(ctx context.Context, provider oa
 		} `json:"data"`
 	}
 	pagesURL := strings.TrimRight(s.config.InstagramFacebookGraphAPIBase, "/") + "/me/accounts?" + url.Values{
-		"fields": {"instagram_business_account{id,username,name,profile_picture_url}"}, "access_token": {token.AccessToken},
+		"fields": {"id,name,instagram_business_account{id,username,name,profile_picture_url}"}, "access_token": {token.AccessToken},
 	}.Encode()
 	if err := doJSON(ctx, http.MethodGet, pagesURL, "", &pages); err != nil {
 		return oauthToken{}, platformProfile{}, fmt.Errorf("Facebook Pages are unavailable")
@@ -285,7 +315,11 @@ func (s *Server) completeInstagramFacebookOAuth(ctx context.Context, provider oa
 		}
 	}
 	if len(accounts) == 0 {
-		return oauthToken{}, platformProfile{}, fmt.Errorf("no professional Instagram account is linked to the selected Facebook Page")
+		pageNames := make([]string, 0, len(pages.Data))
+		for _, page := range pages.Data {
+			pageNames = append(pageNames, page.Name+" ("+page.ID+")")
+		}
+		return oauthToken{}, platformProfile{}, fmt.Errorf("Facebook returned %d Pages but none included a professional Instagram account: %s", len(pages.Data), strings.Join(pageNames, ", "))
 	}
 	if len(accounts) > 1 {
 		return oauthToken{}, platformProfile{}, fmt.Errorf("more than one Instagram account is available; select a single connected Page and try again")
