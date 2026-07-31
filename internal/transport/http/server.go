@@ -66,6 +66,7 @@ func (s *Server) Router() http.Handler {
 			r.With(s.require("ADMIN", "ANALYST")).Post("/creators", s.createCreator)
 			r.Get("/creators/{id}", s.getCreator)
 			r.With(s.require("ADMIN", "ANALYST")).Patch("/creators/{id}", s.updateCreator)
+			r.With(s.require("ADMIN", "ANALYST")).Patch("/creators/{id}/work-status", s.updateCreatorWorkStatus)
 			r.Get("/creators/{id}/credentials", s.listCreatorCredentials)
 			r.With(s.require("ADMIN", "ANALYST")).Put("/creators/{id}/credentials", s.saveCreatorCredentials)
 			r.With(s.require("ADMIN")).Post("/creators/{id}/credentials/{credentialID}/reveal", s.revealCreatorCredential)

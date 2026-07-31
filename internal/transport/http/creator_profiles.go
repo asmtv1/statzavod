@@ -42,8 +42,6 @@ func (s *Server) updateCreator(w http.ResponseWriter, r *http.Request) {
 		TelegramUsername string `json:"telegramUsername"`
 		CompanyID        string `json:"companyId"`
 		Status           string `json:"status"`
-		WorkStatus       string `json:"workStatus"`
-		WorkComment      string `json:"workComment"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || strings.TrimSpace(in.FirstName) == "" || strings.TrimSpace(in.LastName) == "" {
 		problem(w, http.StatusBadRequest, "invalid creator", "firstName and lastName are required")
@@ -60,22 +58,6 @@ func (s *Server) updateCreator(w http.ResponseWriter, r *http.Request) {
 		problem(w, http.StatusBadRequest, "invalid creator", "status must be ACTIVE, ON_LEAVE or DISMISSED")
 		return
 	}
-	workStatus := strings.ToUpper(strings.TrimSpace(in.WorkStatus))
-	if workStatus == "" {
-		workStatus = "OK"
-	}
-	workComment := strings.TrimSpace(in.WorkComment)
-	if workStatus != "OK" && workStatus != "NEEDS_ATTENTION" {
-		problem(w, http.StatusBadRequest, "invalid creator", "workStatus must be OK or NEEDS_ATTENTION")
-		return
-	}
-	if workStatus == "NEEDS_ATTENTION" && workComment == "" {
-		problem(w, http.StatusBadRequest, "invalid creator", "workComment is required when workStatus is NEEDS_ATTENTION")
-		return
-	}
-	if workStatus == "OK" {
-		workComment = ""
-	}
 	var companyID any
 	if strings.TrimSpace(in.CompanyID) != "" {
 		var exists bool
@@ -85,7 +67,7 @@ func (s *Server) updateCreator(w http.ResponseWriter, r *http.Request) {
 		}
 		companyID = in.CompanyID
 	}
-	tag, err := s.pool.Exec(r.Context(), `UPDATE creators SET first_name=$1,last_name=$2,middle_name=$3,display_name=$4,internal_note=$5,telegram_username=$6,status=$7::creator_status,company_id=$8,work_status=$9,work_comment=$10,archived_at=CASE WHEN $7::text='DISMISSED' THEN COALESCE(archived_at,now()) ELSE NULL END,updated_at=now() WHERE id=$11 AND organization_id=$12`, strings.TrimSpace(in.FirstName), strings.TrimSpace(in.LastName), strings.TrimSpace(in.MiddleName), strings.TrimSpace(in.DisplayName), strings.TrimSpace(in.InternalNote), normalizeTelegram(in.TelegramUsername), status, companyID, workStatus, workComment, id, p.OrganizationID)
+	tag, err := s.pool.Exec(r.Context(), `UPDATE creators SET first_name=$1,last_name=$2,middle_name=$3,display_name=$4,internal_note=$5,telegram_username=$6,status=$7::creator_status,company_id=$8,archived_at=CASE WHEN $7::text='DISMISSED' THEN COALESCE(archived_at,now()) ELSE NULL END,updated_at=now() WHERE id=$9 AND organization_id=$10`, strings.TrimSpace(in.FirstName), strings.TrimSpace(in.LastName), strings.TrimSpace(in.MiddleName), strings.TrimSpace(in.DisplayName), strings.TrimSpace(in.InternalNote), normalizeTelegram(in.TelegramUsername), status, companyID, id, p.OrganizationID)
 	if err != nil {
 		problem(w, http.StatusInternalServerError, "update failed", "could not update creator")
 		return
@@ -95,6 +77,43 @@ func (s *Server) updateCreator(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_, _ = s.pool.Exec(r.Context(), `INSERT INTO audit_logs(organization_id,actor_id,action,entity_type,entity_id) VALUES($1,$2,'UPDATE','CREATOR',$3)`, p.OrganizationID, p.ID, id)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) updateCreatorWorkStatus(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	p := r.Context().Value(principalKey).(principal)
+	var in struct {
+		Status  string `json:"status"`
+		Comment string `json:"comment"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		problem(w, http.StatusBadRequest, "invalid work status", "expected JSON body")
+		return
+	}
+	status := strings.ToUpper(strings.TrimSpace(in.Status))
+	comment := strings.TrimSpace(in.Comment)
+	if status != "OK" && status != "NEEDS_ATTENTION" {
+		problem(w, http.StatusBadRequest, "invalid work status", "status must be OK or NEEDS_ATTENTION")
+		return
+	}
+	if status == "NEEDS_ATTENTION" && comment == "" {
+		problem(w, http.StatusBadRequest, "invalid work status", "comment is required when work is needed")
+		return
+	}
+	if status == "OK" {
+		comment = ""
+	}
+	tag, err := s.pool.Exec(r.Context(), `UPDATE creators SET work_status=$1,work_comment=$2,updated_at=now() WHERE id=$3 AND organization_id=$4`, status, comment, id, p.OrganizationID)
+	if err != nil {
+		problem(w, http.StatusInternalServerError, "update failed", "could not update creator work status")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		problem(w, http.StatusNotFound, "not found", "creator does not exist")
+		return
+	}
+	_, _ = s.pool.Exec(r.Context(), `INSERT INTO audit_logs(organization_id,actor_id,action,entity_type,entity_id,metadata) VALUES($1,$2,'UPDATE_WORK_STATUS','CREATOR',$3,jsonb_build_object('status',$4))`, p.OrganizationID, p.ID, id, status)
 	w.WriteHeader(http.StatusNoContent)
 }
 

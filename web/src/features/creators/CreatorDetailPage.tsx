@@ -78,8 +78,6 @@ function CreatorProfile({ creator, creatorID }: { creator: CreatorDetail; creato
     internalNote: creator.internalNote,
     status: creator.status,
     companyId: creator.companyId,
-    workStatus: creator.workStatus,
-    workComment: creator.workComment,
   })
   useEffect(() => {
     setForm({
@@ -91,8 +89,6 @@ function CreatorProfile({ creator, creatorID }: { creator: CreatorDetail; creato
       internalNote: creator.internalNote,
       status: creator.status,
       companyId: creator.companyId,
-      workStatus: creator.workStatus,
-      workComment: creator.workComment,
     })
   }, [creator])
   const update = useMutation({
@@ -120,8 +116,6 @@ function CreatorProfile({ creator, creatorID }: { creator: CreatorDetail; creato
       <label>Отображаемое имя<input value={form.displayName} onChange={(event) => setForm({ ...form, displayName: event.target.value })}/></label>
       <label>Статус<select className={statusStyles.select} value={form.status} onChange={(event) => setForm({ ...form, status: event.target.value as CreatorStatus })}><option value="ACTIVE">Активен</option><option value="ON_LEAVE">В отпуске</option><option value="DISMISSED">Уволен</option></select></label>
       <label>Компания<select className={statusStyles.select} value={form.companyId} onChange={(event) => setForm({ ...form, companyId: event.target.value })}><option value="">Без компании</option>{companies.data?.items.map(company => <option value={company.id} key={company.id}>{company.name}</option>)}</select></label>
-      <label>Работы по креатору<select className={statusStyles.select} value={form.workStatus} onChange={(event) => setForm({ ...form, workStatus: event.target.value as CreatorWorkStatus, workComment: event.target.value === 'OK' ? '' : form.workComment })}><option value="OK">Всё ок</option><option value="NEEDS_ATTENTION">Нужны работы</option></select></label>
-      {form.workStatus === 'NEEDS_ATTENTION' ? <label className={styles.wideField}>Что нужно исправить<textarea required rows={3} placeholder="Опишите, что не так и какие работы нужны" value={form.workComment} onChange={(event) => setForm({ ...form, workComment: event.target.value })}/></label> : null}
       <label className={styles.wideField}>Telegram<input placeholder="@username или t.me/username" value={form.telegramUsername} onChange={(event) => setForm({ ...form, telegramUsername: event.target.value })}/></label>
       <label className={styles.wideField}>Внутренний комментарий<textarea rows={3} value={form.internalNote} onChange={(event) => setForm({ ...form, internalNote: event.target.value })}/></label>
       {update.isError && <p className={styles.error}>{update.error.message}</p>}
@@ -130,9 +124,50 @@ function CreatorProfile({ creator, creatorID }: { creator: CreatorDetail; creato
       <div><span>Полное имя</span><strong>{[creator.lastName, creator.firstName, creator.middleName].filter(Boolean).join(' ')}</strong></div>
       <div><span>Статус</span><strong className={`${statusStyles.status} ${creator.status === 'ACTIVE' ? statusStyles.active : creator.status === 'ON_LEAVE' ? statusStyles.onLeave : statusStyles.dismissed}`}>{creator.status === 'ACTIVE' ? 'Активен' : creator.status === 'ON_LEAVE' ? 'В отпуске' : 'Уволен'}</strong></div>
       <div><span>Компания</span><strong className={creator.companyName ? '' : styles.missing}>{creator.companyName || 'Не назначена'}</strong></div>
-      <div><span>Работы по креатору</span><strong className={creator.workStatus === 'OK' ? styles.workOk : styles.workAttention}>{creator.workStatus === 'OK' ? 'Всё ок' : creator.workComment}</strong></div>
       <div><span>Telegram</span>{telegramURL ? <a href={telegramURL} target="_blank" rel="noreferrer">@{creator.telegramUsername} →</a> : <strong className={styles.missing}>Не указан</strong>}</div>
       <div className={statusStyles.profileNote}><span>Комментарий</span><strong>{creator.internalNote || 'Нет комментария'}</strong></div>
+    </div>}
+  </section>
+}
+
+function CreatorWork({ creator, creatorID }: { creator: CreatorDetail; creatorID: string }) {
+  const client = useQueryClient()
+  const [editing, setEditing] = useState(false)
+  const [status, setStatus] = useState<CreatorWorkStatus>(creator.workStatus)
+  const [comment, setComment] = useState(creator.workComment)
+  useEffect(() => {
+    setStatus(creator.workStatus)
+    setComment(creator.workComment)
+  }, [creator.workStatus, creator.workComment])
+  const update = useMutation({
+    mutationFn: () => api.updateCreatorWorkStatus(creatorID, status, comment),
+    onSuccess: async () => {
+      await Promise.all([
+        client.invalidateQueries({ queryKey: ['creator', creatorID] }),
+        client.invalidateQueries({ queryKey: ['creators'] }),
+      ])
+      setEditing(false)
+    },
+  })
+  const cancel = () => {
+    setStatus(creator.workStatus)
+    setComment(creator.workComment)
+    setEditing(false)
+  }
+
+  return <section className={styles.workPanel}>
+    <div className={styles.sectionHead}>
+      <div><h2>Работы по креатору</h2><p>Текущее состояние карточки и задачи, которые требуют внимания.</p></div>
+      {!editing ? <button className={styles.secondaryButton} onClick={() => setEditing(true)}>Редактировать</button> : null}
+    </div>
+    {editing ? <form className={styles.workForm} onSubmit={event => { event.preventDefault(); update.mutate() }}>
+      <label>Состояние<select className={statusStyles.select} value={status} onChange={event => { const next = event.target.value as CreatorWorkStatus; setStatus(next); if (next === 'OK') setComment('') }}><option value="OK">Всё ок</option><option value="NEEDS_ATTENTION">Нужны работы</option></select></label>
+      {status === 'NEEDS_ATTENTION' ? <label>Что нужно исправить<textarea required rows={4} placeholder="Опишите, что не так и какие работы нужны" value={comment} onChange={event => setComment(event.target.value)}/></label> : null}
+      {update.isError ? <p className={styles.error}>{update.error.message}</p> : null}
+      <div className={styles.formActions}><button type="button" className={styles.ghostButton} onClick={cancel}>Отмена</button><button className={styles.primaryButton} disabled={update.isPending}>{update.isPending ? 'Сохраняем…' : 'Сохранить'}</button></div>
+    </form> : <div className={styles.workSummary}>
+      <strong className={creator.workStatus === 'OK' ? styles.workOk : styles.workAttention}>{creator.workStatus === 'OK' ? 'Всё ок' : 'Нужны работы'}</strong>
+      {creator.workStatus === 'NEEDS_ATTENTION' ? <p>{creator.workComment}</p> : <p>По креатору сейчас ничего делать не нужно.</p>}
     </div>}
   </section>
 }
@@ -287,6 +322,7 @@ export function CreatorDetailPage() {
     <Link to="/app/creators" className={styles.back}>← Креаторы</Link>
     <header><div><p>КАРТОЧКА КРЕАТОРА</p><h1>{creator.data.displayName}</h1></div><div className={styles.headerActions}>{creator.data.telegramUsername && <a className={styles.telegram} href={`https://t.me/${creator.data.telegramUsername}`} target="_blank" rel="noreferrer">Открыть Telegram</a>}</div></header>
     <CreatorProfile creator={creator.data} creatorID={id}/>
+    <CreatorWork creator={creator.data} creatorID={id}/>
     <CredentialVault creatorID={id}/>
     <PlatformConnections creatorID={id}/>
     <section className={styles.contacts}><div className={styles.sectionHead}><div><h2>Контакты</h2><p>Дополнительные способы связи.</p></div></div>{creator.data.contacts.map(c => <p key={c.id}>{c.kind}: {c.value}</p>)}<form onSubmit={event => { event.preventDefault(); if (contact) addContact.mutate() }}><input value={contact} onChange={event => setContact(event.target.value)} placeholder="Email"/><button>Добавить</button></form></section>

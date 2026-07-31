@@ -48,6 +48,7 @@ export const api = {
   contentGroups:()=>request<{items:ContentGroup[]}>('/content-groups'),
   creator:(id:string)=>request<CreatorDetail>(`/creators/${id}`),
   updateCreator:(id:string,payload:Record<string,string>)=>request<void>(`/creators/${id}`,{method:'PATCH',body:JSON.stringify(payload)}),
+  updateCreatorWorkStatus:(id:string,status:CreatorWorkStatus,comment:string)=>request<void>(`/creators/${id}/work-status`,{method:'PATCH',body:JSON.stringify({status,comment})}),
   creatorCredentials:(id:string)=>request<{items:CreatorCredential[]}>(`/creators/${id}/credentials`),
   saveCreatorCredentials:(id:string,items:{section:string;fieldKey:string;value:string}[])=>request<void>(`/creators/${id}/credentials`,{method:'PUT',body:JSON.stringify({items})}),
   revealCreatorCredential:(id:string,credentialID:string)=>request<{value:string}>(`/creators/${id}/credentials/${credentialID}/reveal`,{method:'POST'}),

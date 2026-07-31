@@ -53,6 +53,7 @@
   border: 1px solid rgb(156 229 189 / 22%);
 }
 .profile,
+.workPanel,
 .credentials,
 .table,
 .connections,
@@ -65,6 +66,7 @@
   box-shadow: var(--shadow);
 }
 .profile,
+.workPanel,
 .credentials,
 .table,
 .connections,
@@ -153,11 +155,17 @@ button:disabled {
   text-decoration: none;
   line-height: 1.45;
 }
-.workOk { color: #bcefd0 !important; }
-.workAttention { color: #ffb4a9 !important; line-height: 1.4; }
 .profileSummary a {
   color: #bcefd0;
 }
+.workForm { display: grid; gap: .85rem; margin-top: 1rem; }
+.workForm label { display: grid; gap: .4rem; color: var(--text); font-size: .8rem; font-weight: 650; }
+.workForm textarea { width: 100%; color: var(--text); background: #181a1a; border: 1px solid var(--border); border-radius: .5rem; padding: .65rem .7rem; resize: vertical; font: inherit; }
+.workSummary { display: flex; align-items: center; gap: .8rem; margin-top: 1rem; padding: .9rem; background: rgb(0 0 0 / 12%); border: 1px solid rgb(244 235 218 / 8%); border-radius: .75rem; }
+.workSummary p { margin: 0; color: var(--muted); font-size: .85rem; line-height: 1.45; }
+.workOk,.workAttention { width: max-content; flex: 0 0 auto; border-radius: .4rem; padding: .3rem .5rem; font-size: .76rem; font-weight: 700; }
+.workOk { color: #bcefd0; background: rgb(156 229 189 / 12%); border: 1px solid rgb(156 229 189 / 18%); }
+.workAttention { color: #ffb4a9; background: rgb(255 155 143 / 8%); border: 1px solid rgb(255 155 143 / 20%); }
 .profileForm {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
