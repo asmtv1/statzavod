@@ -148,9 +148,9 @@ func (s *Server) fetchInstagramAccountByID(ctx context.Context, client providerC
 }
 
 func (s *Server) fetchInstagramAccountAt(ctx context.Context, client providerClient, accessToken, path string, includeInstagramLoginUserID bool) (instagramAccount, error) {
-	fields := "id,username,name,account_type,profile_picture_url,followers_count,follows_count,media_count"
+	fields := "id,username,name,profile_picture_url,followers_count,follows_count,media_count"
 	if includeInstagramLoginUserID {
-		fields = "user_id," + fields
+		fields = "user_id,account_type," + fields
 	}
 	endpoint := strings.TrimRight(s.config.InstagramAPIBase, "/") + path + "?" + url.Values{
 		"fields":       {fields},
