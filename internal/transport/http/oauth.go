@@ -90,6 +90,10 @@ func (s *Server) oauthAuthorize(w http.ResponseWriter, r *http.Request) {
 		problem(w, http.StatusServiceUnavailable, provider.Name+" is not configured", "server OAuth credentials are missing")
 		return
 	}
+	if provider.Flow == "FACEBOOK" && s.config.InstagramFacebookConfigID == "" {
+		problem(w, http.StatusServiceUnavailable, provider.Name+" is not configured", "Facebook Login for Business configuration is missing")
+		return
+	}
 	p := r.Context().Value(principalKey).(principal)
 	creatorID := chi.URLParam(r, "id")
 	var exists bool
@@ -135,7 +139,7 @@ func (s *Server) oauthAuthorize(w http.ResponseWriter, r *http.Request) {
 	case "INSTAGRAM":
 		q.Set("scope", strings.Join(provider.Scopes, ","))
 		if provider.Flow == "FACEBOOK" {
-			q.Set("scope", strings.Join(provider.Scopes, ","))
+			q.Set("config_id", s.config.InstagramFacebookConfigID)
 		}
 	case "VK":
 		q.Set("display", "page")

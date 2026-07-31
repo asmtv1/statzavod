@@ -15,6 +15,7 @@ type Config struct {
 	InstagramTokenBase                                                                            string
 	InstagramAPIBase, TikTokClientKey, TikTokClientSecret, TikTokRedirectURL, TikTokAPIBase       string
 	InstagramFacebookRedirectURL, InstagramFacebookOAuthBase, InstagramFacebookGraphAPIBase       string
+	InstagramFacebookConfigID                                                                     string
 	VKClientID, VKClientSecret, VKRedirectURL, VKOAuthBase, VKAPIBase, VKAPIVersion               string
 }
 
@@ -41,6 +42,7 @@ func Load() (Config, error) {
 		InstagramFacebookRedirectURL:  value("INSTAGRAM_FACEBOOK_OAUTH_REDIRECT_URL", "http://localhost:8080/api/v1/oauth/instagram-facebook/callback"),
 		InstagramFacebookOAuthBase:    value("INSTAGRAM_FACEBOOK_OAUTH_BASE", "https://www.facebook.com"),
 		InstagramFacebookGraphAPIBase: value("INSTAGRAM_FACEBOOK_GRAPH_API_BASE", "https://graph.facebook.com"),
+		InstagramFacebookConfigID:     os.Getenv("INSTAGRAM_FACEBOOK_CONFIG_ID"),
 		TikTokClientKey:               os.Getenv("TIKTOK_CLIENT_KEY"), TikTokClientSecret: os.Getenv("TIKTOK_CLIENT_SECRET"),
 		TikTokRedirectURL: value("TIKTOK_REDIRECT_URL", "http://localhost:8080/api/v1/oauth/tiktok/callback"),
 		TikTokAPIBase:     value("TIKTOK_API_BASE", "https://open.tiktokapis.com"),
