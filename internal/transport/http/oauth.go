@@ -122,7 +122,6 @@ func (s *Server) oauthAuthorize(w http.ResponseWriter, r *http.Request) {
 	q := url.Values{
 		"redirect_uri":  {provider.RedirectURL},
 		"response_type": {"code"},
-		"scope":         {strings.Join(provider.Scopes, " ")},
 		"state":         {state},
 	}
 	if provider.ID == "TIKTOK" {
@@ -133,13 +132,15 @@ func (s *Server) oauthAuthorize(w http.ResponseWriter, r *http.Request) {
 	}
 	switch provider.ID {
 	case "YOUTUBE":
+		q.Set("scope", strings.Join(provider.Scopes, " "))
 		q.Set("access_type", "offline")
 		q.Set("include_granted_scopes", "true")
 		q.Set("prompt", "consent")
 	case "INSTAGRAM":
-		q.Set("scope", strings.Join(provider.Scopes, ","))
 		if provider.Flow == "FACEBOOK" {
 			q.Set("config_id", s.config.InstagramFacebookConfigID)
+		} else {
+			q.Set("scope", strings.Join(provider.Scopes, ","))
 		}
 	case "VK":
 		q.Set("display", "page")
