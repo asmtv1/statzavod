@@ -1,8 +1,9 @@
 export type Kpi = { key: string; label: string; value: number }
 export type Summary = { kpis: Kpi[]; freshness: { status: string; message: string } }
 export type CreatorStatus = 'ACTIVE'|'ON_LEAVE'|'DISMISSED'
+export type CreatorWorkStatus = 'OK'|'NEEDS_ATTENTION'
 export type Company = { id:string; name:string; creatorCount:number }
-export type Creator = { id:string; firstName:string; lastName:string; middleName:string; displayName:string; status:CreatorStatus; createdAt:string; telegramUsername:string; companyId:string; companyName:string }
+export type Creator = { id:string; firstName:string; lastName:string; middleName:string; displayName:string; status:CreatorStatus; createdAt:string; telegramUsername:string; companyId:string; companyName:string; workStatus:CreatorWorkStatus; workComment:string }
 export type Timeseries = { items: { date:string; views:number }[] }
 export type Publication = { id:string; title:string | null; platform:string; publishedAt:string; creatorName:string; companyId:string; companyName:string; views:number }
 export type CreatorAnalytics = { creatorId:string; creatorName:string; period:{from:string;to:string}; kpis:Kpi[]; publications:{id:string;title:string;platform:string;publishedAt:string;views:number;likes:number}[] }

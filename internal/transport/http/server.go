@@ -185,7 +185,7 @@ func (s *Server) require(roles ...string) func(http.Handler) http.Handler {
 }
 func (s *Server) listCreators(w http.ResponseWriter, r *http.Request) {
 	p := r.Context().Value(principalKey).(principal)
-	rows, err := s.pool.Query(r.Context(), `SELECT c.id,c.first_name,c.last_name,COALESCE(c.middle_name,''),c.display_name,c.status,c.created_at,c.telegram_username,COALESCE(c.company_id::text,''),COALESCE(x.name,'') FROM creators c LEFT JOIN companies x ON x.id=c.company_id WHERE c.organization_id=$1 ORDER BY CASE c.status WHEN 'ACTIVE' THEN 0 WHEN 'ON_LEAVE' THEN 1 ELSE 2 END,c.display_name`, p.OrganizationID)
+	rows, err := s.pool.Query(r.Context(), `SELECT c.id,c.first_name,c.last_name,COALESCE(c.middle_name,''),c.display_name,c.status,c.created_at,c.telegram_username,COALESCE(c.company_id::text,''),COALESCE(x.name,''),c.work_status,c.work_comment FROM creators c LEFT JOIN companies x ON x.id=c.company_id WHERE c.organization_id=$1 ORDER BY CASE c.status WHEN 'ACTIVE' THEN 0 WHEN 'ON_LEAVE' THEN 1 ELSE 2 END,c.display_name`, p.OrganizationID)
 	if err != nil {
 		problem(w, 500, "query failed", err.Error())
 		return
@@ -193,13 +193,13 @@ func (s *Server) listCreators(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 	items := make([]map[string]any, 0)
 	for rows.Next() {
-		var id, first, last, middle, display, status, telegram, companyID, companyName string
+		var id, first, last, middle, display, status, telegram, companyID, companyName, workStatus, workComment string
 		var created time.Time
-		if err := rows.Scan(&id, &first, &last, &middle, &display, &status, &created, &telegram, &companyID, &companyName); err != nil {
+		if err := rows.Scan(&id, &first, &last, &middle, &display, &status, &created, &telegram, &companyID, &companyName, &workStatus, &workComment); err != nil {
 			problem(w, 500, "scan failed", err.Error())
 			return
 		}
-		items = append(items, map[string]any{"id": id, "firstName": first, "lastName": last, "middleName": middle, "displayName": display, "status": status, "createdAt": created, "telegramUsername": telegram, "companyId": companyID, "companyName": companyName})
+		items = append(items, map[string]any{"id": id, "firstName": first, "lastName": last, "middleName": middle, "displayName": display, "status": status, "createdAt": created, "telegramUsername": telegram, "companyId": companyID, "companyName": companyName, "workStatus": workStatus, "workComment": workComment})
 	}
 	writeJSON(w, 200, map[string]any{"items": items})
 }
@@ -242,8 +242,8 @@ func (s *Server) createCreator(w http.ResponseWriter, r *http.Request) {
 func (s *Server) getCreator(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	p := r.Context().Value(principalKey).(principal)
-	var first, last, middle, display, status, note, telegram, companyID, companyName string
-	err := s.pool.QueryRow(r.Context(), `SELECT c.first_name,c.last_name,COALESCE(c.middle_name,''),c.display_name,c.status,c.internal_note,c.telegram_username,COALESCE(c.company_id::text,''),COALESCE(x.name,'') FROM creators c LEFT JOIN companies x ON x.id=c.company_id WHERE c.id=$1 AND c.organization_id=$2`, id, p.OrganizationID).Scan(&first, &last, &middle, &display, &status, &note, &telegram, &companyID, &companyName)
+	var first, last, middle, display, status, note, telegram, companyID, companyName, workStatus, workComment string
+	err := s.pool.QueryRow(r.Context(), `SELECT c.first_name,c.last_name,COALESCE(c.middle_name,''),c.display_name,c.status,c.internal_note,c.telegram_username,COALESCE(c.company_id::text,''),COALESCE(x.name,''),c.work_status,c.work_comment FROM creators c LEFT JOIN companies x ON x.id=c.company_id WHERE c.id=$1 AND c.organization_id=$2`, id, p.OrganizationID).Scan(&first, &last, &middle, &display, &status, &note, &telegram, &companyID, &companyName, &workStatus, &workComment)
 	if err == pgx.ErrNoRows {
 		problem(w, 404, "not found", "creator does not exist")
 		return
@@ -268,7 +268,7 @@ func (s *Server) getCreator(w http.ResponseWriter, r *http.Request) {
 		}
 		contacts = append(contacts, map[string]any{"id": cid, "kind": kind, "value": value, "label": label, "isPrimary": primary})
 	}
-	writeJSON(w, 200, map[string]any{"id": id, "firstName": first, "lastName": last, "middleName": middle, "displayName": display, "status": status, "internalNote": note, "telegramUsername": telegram, "companyId": companyID, "companyName": companyName, "contacts": contacts})
+	writeJSON(w, 200, map[string]any{"id": id, "firstName": first, "lastName": last, "middleName": middle, "displayName": display, "status": status, "internalNote": note, "telegramUsername": telegram, "companyId": companyID, "companyName": companyName, "workStatus": workStatus, "workComment": workComment, "contacts": contacts})
 }
 func (s *Server) createContact(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")

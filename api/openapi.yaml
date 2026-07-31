@@ -64,7 +64,7 @@ paths:
 components:
   schemas:
     LoginRequest: { type: object, required: [email, password], properties: { email: { type: string, format: email }, password: { type: string, format: password } } }
-    CreatorInput: { type: object, required: [firstName, lastName], properties: { firstName: { type: string }, lastName: { type: string }, middleName: { type: string }, displayName: { type: string }, internalNote: { type: string }, companyId: { type: string, format: uuid, nullable: true } } }
+    CreatorInput: { type: object, required: [firstName, lastName], properties: { firstName: { type: string }, lastName: { type: string }, middleName: { type: string }, displayName: { type: string }, internalNote: { type: string }, companyId: { type: string, format: uuid, nullable: true }, workStatus: { type: string, enum: [OK, NEEDS_ATTENTION] }, workComment: { type: string } } }
     Problem: { type: object, required: [title, status], properties: { type: { type: string }, title: { type: string }, status: { type: integer }, detail: { type: string } } }
   responses:
     Problem: { description: RFC 7807-style error, content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } } }

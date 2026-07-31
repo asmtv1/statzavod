@@ -52,7 +52,7 @@
 .tableHead,
 .creatorRow {
   display: grid;
-  grid-template-columns: minmax(15rem, 1fr) 10rem 10rem 8rem 8rem;
+  grid-template-columns: minmax(15rem, 1fr) 9rem 9rem 8rem minmax(12rem, 16rem);
   gap: 1rem;
   align-items: center;
   padding: 0.95rem 1.15rem;
@@ -113,6 +113,8 @@ time {
 .company { color: #e3b268; font-size: .82rem; }
 .telegram { color: #74b9e8; font-size: .82rem; }
 .unassigned { color: var(--muted); font-size: .82rem; }
+.workOk { width: max-content; color: #bcefd0; background: rgb(156 229 189 / 12%); border: 1px solid rgb(156 229 189 / 18%); border-radius: .4rem; padding: .28rem .45rem; font-size: .74rem; font-weight: 700; }
+.workAttention { color: #ffb4a9; font-size: .78rem; line-height: 1.35; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
 .backdrop {
   position: fixed;
   inset: 0;
