@@ -52,7 +52,7 @@
 .tableHead,
 .creatorRow {
   display: grid;
-  grid-template-columns: 1fr 10rem 8rem 8rem;
+  grid-template-columns: minmax(15rem, 1fr) 10rem 10rem 8rem 8rem;
   gap: 1rem;
   align-items: center;
   padding: 0.95rem 1.15rem;
@@ -111,6 +111,7 @@ time {
 .filters select,.fields select { color: var(--text); background: #191b1b; border: 1px solid var(--border); padding: .62rem; border-radius: .45rem; font: inherit; }
 .filters span { color: var(--muted); font-size: .8rem; }
 .company { color: #e3b268; font-size: .82rem; }
+.telegram { color: #74b9e8; font-size: .82rem; }
 .unassigned { color: var(--muted); font-size: .82rem; }
 .backdrop {
   position: fixed;

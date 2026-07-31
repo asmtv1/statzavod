@@ -185,7 +185,7 @@ func (s *Server) require(roles ...string) func(http.Handler) http.Handler {
 }
 func (s *Server) listCreators(w http.ResponseWriter, r *http.Request) {
 	p := r.Context().Value(principalKey).(principal)
-	rows, err := s.pool.Query(r.Context(), `SELECT c.id,c.first_name,c.last_name,COALESCE(c.middle_name,''),c.display_name,c.status,c.created_at,COALESCE(c.company_id::text,''),COALESCE(x.name,'') FROM creators c LEFT JOIN companies x ON x.id=c.company_id WHERE c.organization_id=$1 ORDER BY CASE c.status WHEN 'ACTIVE' THEN 0 WHEN 'ON_LEAVE' THEN 1 ELSE 2 END,c.display_name`, p.OrganizationID)
+	rows, err := s.pool.Query(r.Context(), `SELECT c.id,c.first_name,c.last_name,COALESCE(c.middle_name,''),c.display_name,c.status,c.created_at,c.telegram_username,COALESCE(c.company_id::text,''),COALESCE(x.name,'') FROM creators c LEFT JOIN companies x ON x.id=c.company_id WHERE c.organization_id=$1 ORDER BY CASE c.status WHEN 'ACTIVE' THEN 0 WHEN 'ON_LEAVE' THEN 1 ELSE 2 END,c.display_name`, p.OrganizationID)
 	if err != nil {
 		problem(w, 500, "query failed", err.Error())
 		return
@@ -193,13 +193,13 @@ func (s *Server) listCreators(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 	items := make([]map[string]any, 0)
 	for rows.Next() {
-		var id, first, last, middle, display, status, companyID, companyName string
+		var id, first, last, middle, display, status, telegram, companyID, companyName string
 		var created time.Time
-		if err := rows.Scan(&id, &first, &last, &middle, &display, &status, &created, &companyID, &companyName); err != nil {
+		if err := rows.Scan(&id, &first, &last, &middle, &display, &status, &created, &telegram, &companyID, &companyName); err != nil {
 			problem(w, 500, "scan failed", err.Error())
 			return
 		}
-		items = append(items, map[string]any{"id": id, "firstName": first, "lastName": last, "middleName": middle, "displayName": display, "status": status, "createdAt": created, "companyId": companyID, "companyName": companyName})
+		items = append(items, map[string]any{"id": id, "firstName": first, "lastName": last, "middleName": middle, "displayName": display, "status": status, "createdAt": created, "telegramUsername": telegram, "companyId": companyID, "companyName": companyName})
 	}
 	writeJSON(w, 200, map[string]any{"items": items})
 }
