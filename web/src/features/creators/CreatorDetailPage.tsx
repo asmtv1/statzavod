@@ -32,6 +32,9 @@ function connectionPermissions(platform: Platform, scopes: string[]) {
     INSTAGRAM: {
       instagram_business_basic: 'Профиль и публикации',
       instagram_business_manage_insights: 'Статистика аккаунта',
+	  instagram_basic: 'Профиль и публикации',
+	  instagram_manage_insights: 'Статистика аккаунта',
+	  pages_show_list: 'Связанный Instagram-аккаунт',
     },
     TIKTOK: {
       'user.info.basic': 'Профиль',
@@ -242,7 +245,7 @@ function PlatformConnections({ creatorID }: { creatorID: string }) {
   const connections = useQuery({ queryKey: ['platform-connections', creatorID], queryFn: () => api.connections(creatorID) })
   const integrations = useQuery({ queryKey: ['integrations'], queryFn: api.integrations })
   const authorize = useMutation({
-    mutationFn: (platform: Platform) => api.startAuthorization(creatorID, platform),
+    mutationFn: (platform: string) => api.startAuthorization(creatorID, platform),
     onSuccess: ({ authorizationUrl }) => window.location.assign(authorizationUrl),
   })
   const refresh = async () => {
@@ -290,7 +293,7 @@ function PlatformConnections({ creatorID }: { creatorID: string }) {
       const isConfigured = configured.get(platform.id)
       return <article className={styles.platformCard} key={platform.id}>
         <div><b>{platform.name}</b><span>{platform.hint}</span><small>{platformConnections.length ? `Аккаунтов: ${platformConnections.length}` : isConfigured === false ? 'Нужны OAuth-реквизиты' : 'Нет подключений'}</small></div>
-        <button onClick={() => authorize.mutate(platform.id)} disabled={authorize.isPending || integrations.isPending || isConfigured === false}>{authorize.isPending && authorize.variables === platform.id ? 'Переходим…' : 'Подключить'}</button>
+        <div><button onClick={() => authorize.mutate(platform.id)} disabled={authorize.isPending || integrations.isPending || isConfigured === false}>{authorize.isPending && authorize.variables === platform.id ? 'Переходим…' : 'Подключить'}</button>{platform.id === 'INSTAGRAM' ? <button onClick={() => authorize.mutate('instagram-facebook')} disabled={authorize.isPending || integrations.isPending} title="Нужна Facebook Page, связанная с профессиональным Instagram">Через Facebook · коллаборации</button> : null}</div>
       </article>
     })}</div>
     {connections.isPending ? <p>Загружаем подключения…</p> : connections.data?.items.length ? <div className={styles.connectionList}>{connections.data.items.map(connection => <article key={connection.id}>

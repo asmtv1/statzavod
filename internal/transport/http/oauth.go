@@ -28,6 +28,7 @@ type oauthProvider struct {
 	AuthorizeURL string
 	Scopes       []string
 	UsePKCE      bool
+	Flow         string
 }
 
 type oauthToken struct {
@@ -60,6 +61,11 @@ func (s *Server) oauthProviders() map[string]oauthProvider {
 			ID: "INSTAGRAM", Name: "Instagram", ClientID: s.config.InstagramClientID, ClientSecret: s.config.InstagramClientSecret,
 			RedirectURL: s.config.InstagramRedirectURL, AuthorizeURL: strings.TrimRight(s.config.InstagramOAuthBase, "/") + "/oauth/authorize",
 			Scopes: []string{"instagram_business_basic", "instagram_business_manage_insights"},
+		},
+		"instagram-facebook": {
+			ID: "INSTAGRAM", Name: "Instagram через Facebook", ClientID: s.config.InstagramClientID, ClientSecret: s.config.InstagramClientSecret,
+			RedirectURL: s.config.InstagramFacebookRedirectURL, AuthorizeURL: strings.TrimRight(s.config.InstagramFacebookOAuthBase, "/") + "/dialog/oauth",
+			Scopes: []string{"instagram_basic", "instagram_manage_insights", "pages_show_list"}, Flow: "FACEBOOK",
 		},
 		"tiktok": {
 			ID: "TIKTOK", Name: "TikTok", ClientID: s.config.TikTokClientKey, ClientSecret: s.config.TikTokClientSecret,
@@ -128,6 +134,9 @@ func (s *Server) oauthAuthorize(w http.ResponseWriter, r *http.Request) {
 		q.Set("prompt", "consent")
 	case "INSTAGRAM":
 		q.Set("scope", strings.Join(provider.Scopes, ","))
+		if provider.Flow == "FACEBOOK" {
+			q.Set("scope", strings.Join(provider.Scopes, ","))
+		}
 	case "VK":
 		q.Set("display", "page")
 		q.Set("v", s.config.VKAPIVersion)
@@ -215,12 +224,75 @@ func (s *Server) completeOAuth(ctx context.Context, provider oauthProvider, code
 	case "YOUTUBE":
 		return s.completeYouTubeOAuth(ctx, provider, code, verifier)
 	case "INSTAGRAM":
+		if provider.Flow == "FACEBOOK" {
+			return s.completeInstagramFacebookOAuth(ctx, provider, code)
+		}
 		return s.completeInstagramOAuth(ctx, provider, code)
 	case "VK":
 		return s.completeVKOAuth(ctx, provider, code)
 	default:
 		return oauthToken{}, platformProfile{}, fmt.Errorf("unsupported OAuth provider")
 	}
+}
+
+func (s *Server) completeInstagramFacebookOAuth(ctx context.Context, provider oauthProvider, code string) (oauthToken, platformProfile, error) {
+	endpoint := strings.TrimRight(s.config.InstagramFacebookGraphAPIBase, "/") + "/oauth/access_token?" + url.Values{
+		"client_id": {provider.ClientID}, "client_secret": {provider.ClientSecret}, "redirect_uri": {provider.RedirectURL}, "code": {code},
+	}.Encode()
+	var token struct {
+		AccessToken string `json:"access_token"`
+		ExpiresIn   int64  `json:"expires_in"`
+	}
+	if err := doJSON(ctx, http.MethodGet, endpoint, "", &token); err != nil || token.AccessToken == "" {
+		return oauthToken{}, platformProfile{}, fmt.Errorf("Facebook token exchange failed")
+	}
+	var longToken struct {
+		AccessToken string `json:"access_token"`
+		ExpiresIn   int64  `json:"expires_in"`
+	}
+	longURL := strings.TrimRight(s.config.InstagramFacebookGraphAPIBase, "/") + "/oauth/access_token?" + url.Values{
+		"grant_type": {"fb_exchange_token"}, "client_id": {provider.ClientID}, "client_secret": {provider.ClientSecret}, "fb_exchange_token": {token.AccessToken},
+	}.Encode()
+	if err := doJSON(ctx, http.MethodGet, longURL, "", &longToken); err == nil && longToken.AccessToken != "" {
+		token = longToken
+	}
+	var pages struct {
+		Data []struct {
+			InstagramBusinessAccount struct {
+				ID                string `json:"id"`
+				Username          string `json:"username"`
+				Name              string `json:"name"`
+				ProfilePictureURL string `json:"profile_picture_url"`
+			} `json:"instagram_business_account"`
+		} `json:"data"`
+	}
+	pagesURL := strings.TrimRight(s.config.InstagramFacebookGraphAPIBase, "/") + "/me/accounts?" + url.Values{
+		"fields": {"instagram_business_account{id,username,name,profile_picture_url}"}, "access_token": {token.AccessToken},
+	}.Encode()
+	if err := doJSON(ctx, http.MethodGet, pagesURL, "", &pages); err != nil {
+		return oauthToken{}, platformProfile{}, fmt.Errorf("Facebook Pages are unavailable")
+	}
+	accounts := make([]struct{ ID, Username, Name, ProfilePictureURL string }, 0, len(pages.Data))
+	for _, page := range pages.Data {
+		if page.InstagramBusinessAccount.ID != "" {
+			accounts = append(accounts, struct{ ID, Username, Name, ProfilePictureURL string }{page.InstagramBusinessAccount.ID, page.InstagramBusinessAccount.Username, page.InstagramBusinessAccount.Name, page.InstagramBusinessAccount.ProfilePictureURL})
+		}
+	}
+	if len(accounts) == 0 {
+		return oauthToken{}, platformProfile{}, fmt.Errorf("no professional Instagram account is linked to the selected Facebook Page")
+	}
+	if len(accounts) > 1 {
+		return oauthToken{}, platformProfile{}, fmt.Errorf("more than one Instagram account is available; select a single connected Page and try again")
+	}
+	account := accounts[0]
+	if account.Username == "" {
+		return oauthToken{}, platformProfile{}, fmt.Errorf("linked Instagram account did not include a username")
+	}
+	displayName := account.Name
+	if displayName == "" {
+		displayName = account.Username
+	}
+	return oauthToken{AccessToken: token.AccessToken, Scopes: provider.Scopes, ExpiresIn: token.ExpiresIn}, platformProfile{ExternalID: account.ID, Username: account.Username, DisplayName: displayName, ProfileURL: "https://www.instagram.com/" + account.Username + "/", AvatarURL: account.ProfilePictureURL, AccountType: "PROFESSIONAL", Metadata: map[string]any{"connectionMode": "FACEBOOK"}}, nil
 }
 
 func (s *Server) completeYouTubeOAuth(ctx context.Context, provider oauthProvider, code, verifier string) (oauthToken, platformProfile, error) {

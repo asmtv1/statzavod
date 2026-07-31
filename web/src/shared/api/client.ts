@@ -61,6 +61,6 @@ export const api = {
   syncHealth:()=>request<{status:string;dueTargets:number}>('/sync/health'),
   connections:(id:string)=>request<{items:PlatformConnection[]}>(`/creators/${id}/connections`),
   integrations:()=>request<{items:IntegrationStatus[];accounts:SyncAccount[]}>('/integrations'),
-  startAuthorization:(id:string,platform:Platform)=>request<{authorizationUrl:string;expiresAt:string}>(`/creators/${id}/connections/${platform.toLowerCase()}/authorize`,{method:'POST'}),
+  startAuthorization:(id:string,platform:string)=>request<{authorizationUrl:string;expiresAt:string}>(`/creators/${id}/connections/${platform.toLowerCase()}/authorize`,{method:'POST'}),
   purgePlatformData:(id:string)=>request<void>(`/platform-accounts/${id}/data`,{method:'DELETE'}),
 }

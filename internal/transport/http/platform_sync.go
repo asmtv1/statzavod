@@ -189,14 +189,14 @@ func (s *Server) accessTokenForSync(ctx context.Context, job platformSyncJob) (s
 
 	var accessCipher, accessNonce, refreshCipher, refreshNonce []byte
 	var expiresAt *time.Time
+	var accountMetadata []byte
 	err = tx.QueryRow(ctx, `
 		SELECT access_token_ciphertext,access_token_nonce,
-		       COALESCE(refresh_token_ciphertext,''::bytea),
-		       COALESCE(refresh_token_nonce,''::bytea),expires_at
-		FROM oauth_connections
-		WHERE platform_account_id=$1 AND organization_id=$2 AND status='ACTIVE'
+		       COALESCE(refresh_token_ciphertext,''::bytea),COALESCE(refresh_token_nonce,''::bytea),expires_at,a.metadata
+		FROM oauth_connections c JOIN platform_accounts a ON a.id=c.platform_account_id
+		WHERE c.platform_account_id=$1 AND c.organization_id=$2 AND c.status='ACTIVE'
 		FOR UPDATE
-	`, job.AccountID, job.OrganizationID).Scan(&accessCipher, &accessNonce, &refreshCipher, &refreshNonce, &expiresAt)
+	`, job.AccountID, job.OrganizationID).Scan(&accessCipher, &accessNonce, &refreshCipher, &refreshNonce, &expiresAt, &accountMetadata)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return "", &providerError{Platform: job.Platform, Kind: providerAuth, Message: "authorization is missing or inactive"}
@@ -220,6 +220,8 @@ func (s *Server) accessTokenForSync(ctx context.Context, job platformSyncJob) (s
 	}
 
 	var refreshed oauthToken
+	var metadata map[string]any
+	_ = json.Unmarshal(accountMetadata, &metadata)
 	switch job.Platform {
 	case "YOUTUBE":
 		if len(refreshCipher) == 0 || len(refreshNonce) == 0 {
@@ -231,7 +233,11 @@ func (s *Server) accessTokenForSync(ctx context.Context, job platformSyncJob) (s
 		}
 		refreshed, err = s.refreshYouTubeAccessToken(ctx, string(refreshPlain))
 	case "INSTAGRAM":
-		refreshed, err = s.refreshInstagramAccessToken(ctx, string(accessPlain))
+		if metadata["connectionMode"] == "FACEBOOK" {
+			refreshed, err = s.refreshInstagramFacebookAccessToken(ctx, string(accessPlain))
+		} else {
+			refreshed, err = s.refreshInstagramAccessToken(ctx, string(accessPlain))
+		}
 	case "TIKTOK":
 		if len(refreshCipher) == 0 || len(refreshNonce) == 0 {
 			return "", &providerError{Platform: "TikTok", Kind: providerAuth, Message: "refresh token is missing"}
@@ -327,6 +333,20 @@ func (s *Server) refreshInstagramAccessToken(ctx context.Context, accessToken st
 	err := newProviderClient("Instagram").JSON(ctx, http.MethodGet, endpoint, "", "", nil, &out)
 	if err != nil {
 		return oauthToken{}, err
+	}
+	return oauthToken{AccessToken: out.AccessToken, ExpiresIn: out.ExpiresIn}, nil
+}
+
+func (s *Server) refreshInstagramFacebookAccessToken(ctx context.Context, accessToken string) (oauthToken, error) {
+	endpoint := strings.TrimRight(s.config.InstagramFacebookGraphAPIBase, "/") + "/oauth/access_token?" + url.Values{
+		"grant_type": {"fb_exchange_token"}, "client_id": {s.config.InstagramClientID}, "client_secret": {s.config.InstagramClientSecret}, "fb_exchange_token": {accessToken},
+	}.Encode()
+	var out struct {
+		AccessToken string `json:"access_token"`
+		ExpiresIn   int64  `json:"expires_in"`
+	}
+	if err := doJSON(ctx, http.MethodGet, endpoint, "", &out); err != nil || out.AccessToken == "" {
+		return oauthToken{}, fmt.Errorf("Facebook token refresh failed")
 	}
 	return oauthToken{AccessToken: out.AccessToken, ExpiresIn: out.ExpiresIn}, nil
 }

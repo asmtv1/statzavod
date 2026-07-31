@@ -64,7 +64,16 @@ type instagramMediaMetrics struct {
 
 func (s *Server) syncInstagramAccount(ctx context.Context, job platformSyncJob, accessToken string) (syncResult, error) {
 	client := newProviderClient("Instagram")
-	account, err := s.fetchInstagramAccount(ctx, client, accessToken)
+	api, includeCollaborations, err := s.instagramAPIForAccount(ctx, job.AccountID)
+	if err != nil {
+		return syncResult{}, err
+	}
+	var account instagramAccount
+	if includeCollaborations {
+		account, err = api.fetchInstagramAccountByID(ctx, client, accessToken, job.ExternalID)
+	} else {
+		account, err = api.fetchInstagramAccount(ctx, client, accessToken)
+	}
 	if err != nil {
 		return syncResult{}, err
 	}
@@ -82,13 +91,25 @@ func (s *Server) syncInstagramAccount(ctx context.Context, job platformSyncJob, 
 		return syncResult{}, err
 	}
 
-	media, err := s.fetchInstagramMedia(ctx, client, accessToken)
+	var media []instagramMedia
+	if includeCollaborations {
+		media, err = api.fetchInstagramMediaByAccountID(ctx, client, accessToken, account.ID)
+	} else {
+		media, err = api.fetchInstagramMedia(ctx, client, accessToken)
+	}
 	if err != nil {
 		return syncResult{}, err
 	}
+	if includeCollaborations {
+		collaborations, collaborationErr := api.fetchInstagramCollaborativeMedia(ctx, client, accessToken, account.ID)
+		if collaborationErr != nil {
+			return syncResult{}, collaborationErr
+		}
+		media = mergeInstagramMedia(media, collaborations)
+	}
 	result := syncResult{RecordsRead: len(media)}
 	for _, item := range media {
-		metrics, metricErr := s.fetchInstagramMediaInsights(ctx, client, accessToken, item)
+		metrics, metricErr := api.fetchInstagramMediaInsights(ctx, client, accessToken, item)
 		if metricErr != nil {
 			return result, metricErr
 		}
@@ -97,15 +118,38 @@ func (s *Server) syncInstagramAccount(ctx context.Context, job platformSyncJob, 
 		}
 		result.RecordsWritten++
 	}
-	if err := s.syncInstagramAccountInsights(ctx, client, accessToken, job.AccountID); err != nil {
+	if err := api.syncInstagramAccountInsights(ctx, client, accessToken, job.AccountID, account.ID, includeCollaborations); err != nil {
 		return result, err
 	}
 	return result, nil
 }
 
+func (s *Server) instagramAPIForAccount(ctx context.Context, accountID string) (*Server, bool, error) {
+	var metadata []byte
+	if err := s.pool.QueryRow(ctx, `SELECT metadata FROM platform_accounts WHERE id=$1`, accountID).Scan(&metadata); err != nil {
+		return nil, false, err
+	}
+	var values map[string]any
+	_ = json.Unmarshal(metadata, &values)
+	if values["connectionMode"] != "FACEBOOK" {
+		return s, false, nil
+	}
+	clone := *s
+	clone.config.InstagramAPIBase = s.config.InstagramFacebookGraphAPIBase
+	return &clone, true, nil
+}
+
 func (s *Server) fetchInstagramAccount(ctx context.Context, client providerClient, accessToken string) (instagramAccount, error) {
+	return s.fetchInstagramAccountAt(ctx, client, accessToken, "/me")
+}
+
+func (s *Server) fetchInstagramAccountByID(ctx context.Context, client providerClient, accessToken, accountID string) (instagramAccount, error) {
+	return s.fetchInstagramAccountAt(ctx, client, accessToken, "/"+url.PathEscape(accountID))
+}
+
+func (s *Server) fetchInstagramAccountAt(ctx context.Context, client providerClient, accessToken, path string) (instagramAccount, error) {
 	fields := "id,user_id,username,name,account_type,profile_picture_url,followers_count,follows_count,media_count"
-	endpoint := strings.TrimRight(s.config.InstagramAPIBase, "/") + "/me?" + url.Values{
+	endpoint := strings.TrimRight(s.config.InstagramAPIBase, "/") + path + "?" + url.Values{
 		"fields":       {fields},
 		"access_token": {accessToken},
 	}.Encode()
@@ -123,8 +167,20 @@ func (s *Server) fetchInstagramAccount(ctx context.Context, client providerClien
 }
 
 func (s *Server) fetchInstagramMedia(ctx context.Context, client providerClient, accessToken string) ([]instagramMedia, error) {
+	return s.fetchInstagramMediaEdge(ctx, client, accessToken, "/me/media")
+}
+
+func (s *Server) fetchInstagramMediaByAccountID(ctx context.Context, client providerClient, accessToken, accountID string) ([]instagramMedia, error) {
+	return s.fetchInstagramMediaEdge(ctx, client, accessToken, "/"+url.PathEscape(accountID)+"/media")
+}
+
+func (s *Server) fetchInstagramCollaborativeMedia(ctx context.Context, client providerClient, accessToken, accountID string) ([]instagramMedia, error) {
+	return s.fetchInstagramMediaEdge(ctx, client, accessToken, "/"+url.PathEscape(accountID)+"/collaborative_media")
+}
+
+func (s *Server) fetchInstagramMediaEdge(ctx context.Context, client providerClient, accessToken, edge string) ([]instagramMedia, error) {
 	fields := "id,caption,media_type,media_product_type,permalink,thumbnail_url,media_url,timestamp,username,like_count,comments_count"
-	next := strings.TrimRight(s.config.InstagramAPIBase, "/") + "/me/media?" + url.Values{
+	next := strings.TrimRight(s.config.InstagramAPIBase, "/") + edge + "?" + url.Values{
 		"fields":       {fields},
 		"limit":        {"100"},
 		"access_token": {accessToken},
@@ -144,6 +200,24 @@ func (s *Server) fetchInstagramMedia(ctx context.Context, client providerClient,
 		next = response.Paging.Next
 	}
 	return items, nil
+}
+
+func mergeInstagramMedia(groups ...[]instagramMedia) []instagramMedia {
+	seen := make(map[string]struct{})
+	var result []instagramMedia
+	for _, group := range groups {
+		for _, item := range group {
+			if item.ID == "" {
+				continue
+			}
+			if _, exists := seen[item.ID]; exists {
+				continue
+			}
+			seen[item.ID] = struct{}{}
+			result = append(result, item)
+		}
+	}
+	return result
 }
 
 func (s *Server) fetchInstagramMediaInsights(ctx context.Context, client providerClient, accessToken string, media instagramMedia) (instagramMediaMetrics, error) {
@@ -261,7 +335,7 @@ func parseInstagramTimestamp(value string) (time.Time, error) {
 	return time.Time{}, parseErr
 }
 
-func (s *Server) syncInstagramAccountInsights(ctx context.Context, client providerClient, accessToken, accountID string) error {
+func (s *Server) syncInstagramAccountInsights(ctx context.Context, client providerClient, accessToken, accountID, externalID string, facebookLogin bool) error {
 	end := time.Now().UTC()
 	start := end.AddDate(0, 0, -30)
 	metrics := []string{"views", "reach", "accounts_engaged", "total_interactions", "follows_and_unfollows"}
@@ -273,7 +347,11 @@ func (s *Server) syncInstagramAccountInsights(ctx context.Context, client provid
 			"until":        {end.Format(time.RFC3339)},
 			"access_token": {accessToken},
 		}
-		endpoint := strings.TrimRight(s.config.InstagramAPIBase, "/") + "/me/insights?" + values.Encode()
+		path := "/me/insights"
+		if facebookLogin {
+			path = "/" + url.PathEscape(externalID) + "/insights"
+		}
+		endpoint := strings.TrimRight(s.config.InstagramAPIBase, "/") + path + "?" + values.Encode()
 		var response instagramInsightResponse
 		err := client.JSON(ctx, http.MethodGet, endpoint, "", "", nil, &response)
 		if err != nil {
