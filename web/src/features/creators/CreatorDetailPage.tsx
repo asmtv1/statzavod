@@ -36,6 +36,7 @@ function connectionPermissions(platform: Platform, scopes: string[]) {
 	  instagram_manage_insights: 'Статистика аккаунта',
 	  pages_read_engagement: 'Связь Instagram со страницей Facebook',
 	  pages_show_list: 'Связанный Instagram-аккаунт',
+	  business_management: 'Доступ к страницам бизнес-портфолио',
     },
     TIKTOK: {
       'user.info.basic': 'Профиль',

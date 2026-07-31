@@ -65,7 +65,7 @@ func (s *Server) oauthProviders() map[string]oauthProvider {
 		"instagram-facebook": {
 			ID: "INSTAGRAM", Name: "Instagram через Facebook", ClientID: s.config.InstagramFacebookClientID, ClientSecret: s.config.InstagramFacebookClientSecret,
 			RedirectURL: s.config.InstagramFacebookRedirectURL, AuthorizeURL: strings.TrimRight(s.config.InstagramFacebookOAuthBase, "/") + "/dialog/oauth",
-			Scopes: []string{"instagram_basic", "instagram_manage_insights", "pages_show_list", "pages_read_engagement"}, Flow: "FACEBOOK",
+			Scopes: []string{"instagram_basic", "instagram_manage_insights", "pages_show_list", "pages_read_engagement", "business_management"}, Flow: "FACEBOOK",
 		},
 		"tiktok": {
 			ID: "TIKTOK", Name: "TikTok", ClientID: s.config.TikTokClientKey, ClientSecret: s.config.TikTokClientSecret,
@@ -290,23 +290,36 @@ func (s *Server) completeInstagramFacebookOAuth(ctx context.Context, provider oa
 	if len(missing) > 0 {
 		return oauthToken{}, platformProfile{}, fmt.Errorf("Facebook permissions were not granted: %s", strings.Join(missing, ", "))
 	}
-	var pages struct {
-		Data []struct {
-			ID                       string `json:"id"`
-			Name                     string `json:"name"`
-			InstagramBusinessAccount struct {
-				ID                string `json:"id"`
-				Username          string `json:"username"`
-				Name              string `json:"name"`
-				ProfilePictureURL string `json:"profile_picture_url"`
-			} `json:"instagram_business_account"`
-		} `json:"data"`
+	type facebookPage struct {
+		ID                       string `json:"id"`
+		Name                     string `json:"name"`
+		InstagramBusinessAccount struct {
+			ID                string `json:"id"`
+			Username          string `json:"username"`
+			Name              string `json:"name"`
+			ProfilePictureURL string `json:"profile_picture_url"`
+		} `json:"instagram_business_account"`
 	}
+	var pages struct {
+		Data []facebookPage `json:"data"`
+	}
+	pageFields := "id,name,instagram_business_account{id,username,name,profile_picture_url}"
 	pagesURL := strings.TrimRight(s.config.InstagramFacebookGraphAPIBase, "/") + "/me/accounts?" + url.Values{
-		"fields": {"id,name,instagram_business_account{id,username,name,profile_picture_url}"}, "access_token": {token.AccessToken},
+		"fields": {pageFields}, "access_token": {token.AccessToken},
 	}.Encode()
 	if err := doJSON(ctx, http.MethodGet, pagesURL, "", &pages); err != nil {
 		return oauthToken{}, platformProfile{}, fmt.Errorf("Facebook Pages are unavailable")
+	}
+	if len(pages.Data) == 0 {
+		assignedPagesURL := strings.TrimRight(s.config.InstagramFacebookGraphAPIBase, "/") + "/me/assigned_pages?" + url.Values{
+			"fields": {pageFields}, "access_token": {token.AccessToken},
+		}.Encode()
+		var assignedPages struct {
+			Data []facebookPage `json:"data"`
+		}
+		if err := doJSON(ctx, http.MethodGet, assignedPagesURL, "", &assignedPages); err == nil {
+			pages.Data = assignedPages.Data
+		}
 	}
 	accounts := make([]struct{ ID, Username, Name, ProfilePictureURL string }, 0, len(pages.Data))
 	for _, page := range pages.Data {
