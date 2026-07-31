@@ -7,8 +7,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/statzavod/statzavod/internal/config"
 )
 
 func TestParseInstagramTimestamp(t *testing.T) {
@@ -89,46 +87,5 @@ func TestFetchInstagramMediaInsightsBatchesMetrics(t *testing.T) {
 	}
 	if got.Likes == nil || *got.Likes != 11 || got.Comments == nil || *got.Comments != 3 {
 		t.Fatalf("media counters were not preserved: %+v", got)
-	}
-}
-
-func TestFetchInstagramCollaborativeMedia(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/me/collaborative_media" {
-			t.Fatalf("path = %q, want collaborative media edge", r.URL.Path)
-		}
-		if r.URL.Query().Get("access_token") != "token" {
-			t.Fatal("access token was not included")
-		}
-		_, _ = w.Write([]byte(`{"data":[{"id":"collab-1","media_type":"VIDEO","timestamp":"2026-07-01T12:00:00+0000"}]}`))
-	}))
-	defer server.Close()
-
-	app := &Server{config: config.Config{InstagramAPIBase: server.URL}}
-	items, err := app.fetchInstagramCollaborativeMedia(context.Background(), newProviderClient("Instagram"), "token")
-	if err != nil {
-		t.Fatalf("fetchInstagramCollaborativeMedia: %v", err)
-	}
-	if len(items) != 1 || items[0].ID != "collab-1" {
-		t.Fatalf("items = %+v, want collab-1", items)
-	}
-}
-
-func TestMergeInstagramMediaDeduplicatesByMediaID(t *testing.T) {
-	items := mergeInstagramMedia(
-		[]instagramMedia{{ID: "owned-1"}, {ID: "shared-1"}},
-		[]instagramMedia{{ID: "shared-1"}, {ID: "collab-1"}, {ID: ""}},
-	)
-	if len(items) != 3 {
-		t.Fatalf("len(items) = %d, want 3", len(items))
-	}
-	got := make(map[string]bool, len(items))
-	for _, item := range items {
-		got[item.ID] = true
-	}
-	for _, id := range []string{"owned-1", "shared-1", "collab-1"} {
-		if !got[id] {
-			t.Errorf("missing media %q", id)
-		}
 	}
 }

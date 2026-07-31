@@ -86,15 +86,6 @@ func (s *Server) syncInstagramAccount(ctx context.Context, job platformSyncJob, 
 	if err != nil {
 		return syncResult{}, err
 	}
-	// Instagram keeps accepted collaborator posts out of /me/media because the
-	// connected account is not their original author. They are still displayed
-	// on the collaborator's profile and included in media_count, so import them
-	// from the dedicated edge as well.
-	collaborativeMedia, err := s.fetchInstagramCollaborativeMedia(ctx, client, accessToken)
-	if err != nil {
-		return syncResult{}, err
-	}
-	media = mergeInstagramMedia(media, collaborativeMedia)
 	result := syncResult{RecordsRead: len(media)}
 	for _, item := range media {
 		metrics, metricErr := s.fetchInstagramMediaInsights(ctx, client, accessToken, item)
@@ -132,16 +123,8 @@ func (s *Server) fetchInstagramAccount(ctx context.Context, client providerClien
 }
 
 func (s *Server) fetchInstagramMedia(ctx context.Context, client providerClient, accessToken string) ([]instagramMedia, error) {
-	return s.fetchInstagramMediaEdge(ctx, client, accessToken, "/me/media")
-}
-
-func (s *Server) fetchInstagramCollaborativeMedia(ctx context.Context, client providerClient, accessToken string) ([]instagramMedia, error) {
-	return s.fetchInstagramMediaEdge(ctx, client, accessToken, "/me/collaborative_media")
-}
-
-func (s *Server) fetchInstagramMediaEdge(ctx context.Context, client providerClient, accessToken, edge string) ([]instagramMedia, error) {
 	fields := "id,caption,media_type,media_product_type,permalink,thumbnail_url,media_url,timestamp,username,like_count,comments_count"
-	next := strings.TrimRight(s.config.InstagramAPIBase, "/") + edge + "?" + url.Values{
+	next := strings.TrimRight(s.config.InstagramAPIBase, "/") + "/me/media?" + url.Values{
 		"fields":       {fields},
 		"limit":        {"100"},
 		"access_token": {accessToken},
@@ -161,24 +144,6 @@ func (s *Server) fetchInstagramMediaEdge(ctx context.Context, client providerCli
 		next = response.Paging.Next
 	}
 	return items, nil
-}
-
-func mergeInstagramMedia(groups ...[]instagramMedia) []instagramMedia {
-	seen := make(map[string]struct{})
-	items := make([]instagramMedia, 0)
-	for _, group := range groups {
-		for _, item := range group {
-			if item.ID == "" {
-				continue
-			}
-			if _, exists := seen[item.ID]; exists {
-				continue
-			}
-			seen[item.ID] = struct{}{}
-			items = append(items, item)
-		}
-	}
-	return items
 }
 
 func (s *Server) fetchInstagramMediaInsights(ctx context.Context, client providerClient, accessToken string, media instagramMedia) (instagramMediaMetrics, error) {
