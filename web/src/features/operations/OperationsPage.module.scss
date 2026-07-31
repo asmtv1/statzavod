@@ -41,6 +41,10 @@
 .error {
   color: #ff9b8f;
 }
+.companyToolbar { display: flex; align-items: end; justify-content: space-between; gap: 1rem; padding: 1rem; border-bottom: 1px solid var(--border); }
+.companyToolbar label { display: grid; gap: .35rem; color: var(--muted); font-size: .75rem; }
+.companyToolbar select { color: var(--text); background: #181a1a; border: 1px solid var(--border); border-radius: .45rem; padding: .58rem; font: inherit; }
+.companyToolbar>span { color: var(--muted); font-size: .8rem; }
 .row {
   display: grid;
   grid-template-columns: 1fr 10rem 8rem;

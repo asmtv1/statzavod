@@ -4,7 +4,16 @@ import { Link } from 'react-router-dom'
 import { api, type Platform, type SyncAccount } from '../../shared/api/client'
 import styles from './OperationsPage.module.scss'
 
-export function PublicationsPage() { const result=useQuery({queryKey:['publications'],queryFn:api.publications}); return <Page title="Публикации" eyebrow="КОНТЕНТ" description="Все обнаруженные видео и их последние показатели."><DataState pending={result.isPending} error={result.isError ? result.error.message : ''} empty={!result.data?.items.length} emptyText="Публикации появятся после подключения аккаунта и первого сбора данных.">{result.data?.items.map((item)=><article className={styles.row} key={item.id}><div><b>{item.title || 'Без названия'}</b><small>{item.creatorName} · {item.platform}</small></div><strong>{new Intl.NumberFormat('ru-RU').format(item.views)} <small>просмотров</small></strong><time>{new Date(item.publishedAt).toLocaleDateString('ru-RU')}</time></article>)}</DataState></Page> }
+export function PublicationsPage() {
+  const [companyFilter,setCompanyFilter] = useState('ALL')
+  const result=useQuery({queryKey:['publications'],queryFn:api.publications})
+  const companies=useQuery({queryKey:['companies'],queryFn:api.companies})
+  const items=result.data?.items.filter(item => companyFilter === 'ALL' || (companyFilter === 'NONE' ? !item.companyId : item.companyId === companyFilter)) ?? []
+  return <Page title="Публикации" eyebrow="КОНТЕНТ" description="Все обнаруженные видео и их последние показатели.">
+    <div className={styles.companyToolbar}><label>Компания<select value={companyFilter} onChange={event => setCompanyFilter(event.target.value)}><option value="ALL">Все компании</option>{companies.data?.items.map(company => <option value={company.id} key={company.id}>{company.name}</option>)}<option value="NONE">Без компании</option></select></label><span>Публикаций: {items.length}</span></div>
+    <DataState pending={result.isPending} error={result.isError ? result.error.message : ''} empty={!items.length} emptyText={result.data?.items.length ? 'У выбранной компании публикаций пока нет.' : 'Публикации появятся после подключения аккаунта и первого сбора данных.'}>{items.map((item)=><article className={styles.row} key={item.id}><div><b>{item.title || 'Без названия'}</b><small>{item.creatorName} · {item.companyName || 'Без компании'} · {item.platform}</small></div><strong>{new Intl.NumberFormat('ru-RU').format(item.views)} <small>просмотров</small></strong><time>{new Date(item.publishedAt).toLocaleDateString('ru-RU')}</time></article>)}</DataState>
+  </Page>
+}
 export function ContentGroupsPage() { const groups=useQuery({queryKey:['content-groups'],queryFn:api.contentGroups});return <Page title="Креативы" eyebrow="СРАВНЕНИЕ" description="Объединяйте один ролик, опубликованный на нескольких платформах.">{groups.isPending?<div className={styles.state}>Загрузка…</div>:groups.data?.items.length?<div className={styles.list}>{groups.data.items.map(group=><article className={styles.row} key={group.id}><div><b>{group.name}</b><small>{group.creatorName}</small></div><strong>{group.publicationCount} публикаций</strong><span>{group.status}</span></article>)}</div>:<div className={styles.empty}><h2>Креативов пока нет</h2><p>После появления публикаций система покажет предложения совпадений. Объединение всегда подтверждает администратор.</p></div>}</Page> }
 const healthLabels: Record<SyncAccount['health'], string> = {
   HEALTHY: 'Работает',

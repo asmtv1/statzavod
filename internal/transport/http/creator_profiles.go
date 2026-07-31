@@ -40,6 +40,7 @@ func (s *Server) updateCreator(w http.ResponseWriter, r *http.Request) {
 		DisplayName      string `json:"displayName"`
 		InternalNote     string `json:"internalNote"`
 		TelegramUsername string `json:"telegramUsername"`
+		CompanyID        string `json:"companyId"`
 		Status           string `json:"status"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || strings.TrimSpace(in.FirstName) == "" || strings.TrimSpace(in.LastName) == "" {
@@ -57,7 +58,16 @@ func (s *Server) updateCreator(w http.ResponseWriter, r *http.Request) {
 		problem(w, http.StatusBadRequest, "invalid creator", "status must be ACTIVE, ON_LEAVE or DISMISSED")
 		return
 	}
-	tag, err := s.pool.Exec(r.Context(), `UPDATE creators SET first_name=$1,last_name=$2,middle_name=$3,display_name=$4,internal_note=$5,telegram_username=$6,status=$7::creator_status,archived_at=CASE WHEN $7::text='DISMISSED' THEN COALESCE(archived_at,now()) ELSE NULL END,updated_at=now() WHERE id=$8 AND organization_id=$9`, strings.TrimSpace(in.FirstName), strings.TrimSpace(in.LastName), strings.TrimSpace(in.MiddleName), strings.TrimSpace(in.DisplayName), strings.TrimSpace(in.InternalNote), normalizeTelegram(in.TelegramUsername), status, id, p.OrganizationID)
+	var companyID any
+	if strings.TrimSpace(in.CompanyID) != "" {
+		var exists bool
+		if err := s.pool.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM companies WHERE id=$1 AND organization_id=$2 AND archived_at IS NULL)`, in.CompanyID, p.OrganizationID).Scan(&exists); err != nil || !exists {
+			problem(w, http.StatusBadRequest, "invalid company", "company does not exist")
+			return
+		}
+		companyID = in.CompanyID
+	}
+	tag, err := s.pool.Exec(r.Context(), `UPDATE creators SET first_name=$1,last_name=$2,middle_name=$3,display_name=$4,internal_note=$5,telegram_username=$6,status=$7::creator_status,company_id=$8,archived_at=CASE WHEN $7::text='DISMISSED' THEN COALESCE(archived_at,now()) ELSE NULL END,updated_at=now() WHERE id=$9 AND organization_id=$10`, strings.TrimSpace(in.FirstName), strings.TrimSpace(in.LastName), strings.TrimSpace(in.MiddleName), strings.TrimSpace(in.DisplayName), strings.TrimSpace(in.InternalNote), normalizeTelegram(in.TelegramUsername), status, companyID, id, p.OrganizationID)
 	if err != nil {
 		problem(w, http.StatusInternalServerError, "update failed", "could not update creator")
 		return

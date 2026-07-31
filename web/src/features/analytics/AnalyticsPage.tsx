@@ -11,9 +11,12 @@ const number = new Intl.NumberFormat('ru-RU')
 
 export function AnalyticsPage() {
   const creators = useQuery({ queryKey:['creators'], queryFn:api.creators })
+  const companies = useQuery({ queryKey:['companies'], queryFn:api.companies })
   const [from,setFrom] = useState(monthAgo)
   const [to,setTo] = useState(today)
   const [selected,setSelected] = useState<string[]>([])
+  const [companyFilter,setCompanyFilter] = useState('ALL')
+  const visibleCreators = creators.data?.items.filter(creator => companyFilter === 'ALL' || (companyFilter === 'NONE' ? !creator.companyId : creator.companyId === companyFilter)) ?? []
   const report = useMutation({
     mutationFn: async () => Promise.all(selected.map(id => api.creatorAnalytics(id,from,to))),
   })
@@ -31,7 +34,7 @@ export function AnalyticsPage() {
   const exportQuery = new URLSearchParams({ creatorIds:selected.join(','), activityFrom:from, activityTo:to })
 
   const toggle = (id:string) => setSelected(current => current.includes(id) ? current.filter(item => item !== id) : [...current,id])
-  const selectAll = () => setSelected(creators.data?.items.map(item => item.id) ?? [])
+  const selectAll = () => setSelected(visibleCreators.map(item => item.id))
 
   return <section className={styles.page}>
     <header><div><p>ОТЧЁТЫ И СРАВНЕНИЯ</p><h1>Аналитика</h1><span>Соберите статистику по одному или нескольким креаторам за нужный период.</span></div></header>
@@ -42,8 +45,8 @@ export function AnalyticsPage() {
         <label>По<input type="date" value={to} onChange={event => setTo(event.target.value)}/></label>
       </div>
       <div className={styles.people}>
-        <div className={styles.peopleHead}><div><b>Креаторы</b><small>Выбрано: {selected.length}</small></div><button onClick={selected.length === creators.data?.items.length ? () => setSelected([]) : selectAll}>{selected.length === creators.data?.items.length ? 'Снять выбор' : 'Выбрать всех'}</button></div>
-        <div className={styles.peopleList}>{creators.isPending ? <span>Загружаем список…</span> : creators.data?.items.map(creator => <label key={creator.id}><input type="checkbox" checked={selected.includes(creator.id)} onChange={() => toggle(creator.id)}/><span><b>{creator.displayName}</b><small>{creator.status === 'ACTIVE' ? 'Активен' : creator.status === 'ON_LEAVE' ? 'В отпуске' : 'Уволен'}</small></span></label>)}</div>
+        <div className={styles.peopleHead}><div><b>Креаторы</b><small>Выбрано: {selected.length}</small></div><div className={styles.peopleTools}><select aria-label="Компания" value={companyFilter} onChange={event => { const next = event.target.value; setCompanyFilter(next); setSelected(creators.data?.items.filter(creator => creator.status !== 'DISMISSED' && (next === 'ALL' || (next === 'NONE' ? !creator.companyId : creator.companyId === next))).map(creator => creator.id) ?? []) }}><option value="ALL">Все компании</option>{companies.data?.items.map(company => <option value={company.id} key={company.id}>{company.name}</option>)}<option value="NONE">Без компании</option></select><button onClick={selected.length === visibleCreators.length ? () => setSelected([]) : selectAll}>{selected.length === visibleCreators.length ? 'Снять выбор' : 'Выбрать всех'}</button></div></div>
+        <div className={styles.peopleList}>{creators.isPending ? <span>Загружаем список…</span> : visibleCreators.map(creator => <label key={creator.id}><input type="checkbox" checked={selected.includes(creator.id)} onChange={() => toggle(creator.id)}/><span><b>{creator.displayName}</b><small>{creator.companyName || 'Без компании'} · {creator.status === 'ACTIVE' ? 'Активен' : creator.status === 'ON_LEAVE' ? 'В отпуске' : 'Уволен'}</small></span></label>)}</div>
       </div>
       <div className={styles.builderActions}><span>{from && to ? `${new Date(from).toLocaleDateString('ru-RU')} — ${new Date(to).toLocaleDateString('ru-RU')}` : 'Укажите период'}</span><button onClick={() => report.mutate()} disabled={!selected.length || !from || !to || report.isPending}>{report.isPending ? 'Собираем…' : 'Собрать статистику'}</button></div>
     </section>

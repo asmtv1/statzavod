@@ -1,0 +1,24 @@
+.page { display: grid; gap: 1.25rem; }
+.page header p { color: var(--gold); font-size: .66rem; font-weight: 750; letter-spacing: .16em; margin: 0; }
+.page header h1 { margin: .15rem 0 .35rem; letter-spacing: -.045em; }
+.page header span { color: var(--muted); }
+.create { display: flex; align-items: end; gap: .8rem; padding: 1.1rem; background: linear-gradient(145deg,#2a2d2d,#202222); border: 1px solid var(--border); border-radius: 1rem; }
+.create label { display: grid; flex: 1; gap: .4rem; font-size: .84rem; font-weight: 650; }
+.create input { color: var(--text); background: #191b1b; border: 1px solid var(--border); padding: .68rem; border-radius: .45rem; font: inherit; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill,minmax(18rem,1fr)); gap: .8rem; }
+.grid article { display: grid; grid-template-columns: 2.7rem 1fr auto; align-items: center; gap: .8rem; padding: 1.1rem; background: linear-gradient(145deg,#2a2d2d,#202222); border: 1px solid var(--border); border-radius: 1rem; }
+.grid h2,.grid p { margin: 0; }
+.grid h2 { font-size: 1rem; }
+.grid p { color: var(--muted); font-size: .82rem; margin-top: .25rem; }
+.mark { display: grid; place-items: center; width: 2.7rem; height: 2.7rem; border-radius: .7rem; color: #211e1a; background: linear-gradient(145deg,#e3b268,#cc8766); font-weight: 800; }
+.archive,.dialog button { border: 0; background: transparent; color: var(--muted); cursor: pointer; font: inherit; }
+.archive { font-size: .78rem; }
+.state,.error { padding: 1.25rem; background: #202222; border: 1px solid var(--border); border-radius: 1rem; }
+.error { color: #ff9b8f; }
+.backdrop { position: fixed; inset: 0; z-index: 10; display: grid; place-items: center; padding: 1rem; background: rgb(6 7 7/.7); backdrop-filter: blur(8px); }
+.dialog { width: min(100%,30rem); padding: 1.35rem; background: linear-gradient(145deg,#313434,#202222); border: 1px solid var(--border); border-radius: 1rem; box-shadow: 0 25px 60px rgb(0 0 0/.5); }
+.dialog h2 { margin-top: 0; }
+.dialog p { color: var(--muted); line-height: 1.5; }
+.dialog footer { display: flex; justify-content: flex-end; gap: .7rem; }
+.dialog .confirm { color: #ff9b8f; }
+@media (max-width:620px) { .create { align-items: stretch; flex-direction: column; } .grid article { grid-template-columns: 2.7rem 1fr; } .archive { grid-column: 2; justify-self: start; } }

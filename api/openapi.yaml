@@ -44,6 +44,17 @@ paths:
       summary: Create creator
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreatorInput' } } } }
       responses: { '201': { description: Created }, '400': { $ref: '#/components/responses/Problem' } }
+  /companies:
+    get: { summary: List companies in the current organization, responses: { '200': { description: Company list } } }
+    post:
+      summary: Create company
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [name], properties: { name: { type: string } } } } } }
+      responses: { '201': { description: Created }, '409': { $ref: '#/components/responses/Problem' } }
+  /companies/{id}:
+    delete:
+      summary: Archive company and detach its creators
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses: { '204': { description: Archived }, '404': { $ref: '#/components/responses/Problem' } }
   /analytics/summary:
     get: { summary: Dashboard KPI summary, responses: { '200': { description: Summary } } }
   /analytics/timeseries:
@@ -53,7 +64,7 @@ paths:
 components:
   schemas:
     LoginRequest: { type: object, required: [email, password], properties: { email: { type: string, format: email }, password: { type: string, format: password } } }
-    CreatorInput: { type: object, required: [firstName, lastName], properties: { firstName: { type: string }, lastName: { type: string }, middleName: { type: string }, displayName: { type: string }, internalNote: { type: string } } }
+    CreatorInput: { type: object, required: [firstName, lastName], properties: { firstName: { type: string }, lastName: { type: string }, middleName: { type: string }, displayName: { type: string }, internalNote: { type: string }, companyId: { type: string, format: uuid, nullable: true } } }
     Problem: { type: object, required: [title, status], properties: { type: { type: string }, title: { type: string }, status: { type: integer }, detail: { type: string } } }
   responses:
     Problem: { description: RFC 7807-style error, content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } } }
