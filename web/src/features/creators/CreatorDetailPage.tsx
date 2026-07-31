@@ -17,7 +17,7 @@ type CredentialSection = { id: string; name: string; fields: CredentialField[] }
 
 const credentialSections: CredentialSection[] = [
   { id: 'GMAIL', name: 'Gmail', fields: [{ key: 'login', label: 'Логин' }, { key: 'password', label: 'Пароль', secret: true }, { key: 'phone', label: 'Телефон' }] },
-  { id: 'YOUTUBE', name: 'YouTube', fields: [{ key: 'note', label: 'Способ доступа' }, { key: 'login', label: 'Логин' }, { key: 'password', label: 'Пароль', secret: true }, { key: 'phone', label: 'Телефон' }, { key: 'email', label: 'Почта' }] },
+  { id: 'YOUTUBE', name: 'YouTube', fields: [{ key: 'note', label: 'Способ доступа' }, { key: 'email', label: 'Почта аккаунта YouTube' }, { key: 'access_email', label: 'Почта креатора для доступа' }, { key: 'phone', label: 'Телефон' }] },
   { id: 'INSTAGRAM', name: 'Instagram', fields: [{ key: 'login', label: 'Логин' }, { key: 'password', label: 'Пароль', secret: true }, { key: 'phone', label: 'Телефон' }, { key: 'email', label: 'Почта' }] },
   { id: 'TIKTOK', name: 'TikTok', fields: [{ key: 'login', label: 'Логин' }, { key: 'password', label: 'Пароль', secret: true }, { key: 'phone', label: 'Телефон' }, { key: 'email', label: 'Почта' }] },
   { id: 'VK', name: 'ВКонтакте', fields: [{ key: 'login', label: 'Логин' }, { key: 'password', label: 'Пароль', secret: true }, { key: 'phone', label: 'Телефон' }] },

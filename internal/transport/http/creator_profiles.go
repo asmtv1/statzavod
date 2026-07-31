@@ -12,7 +12,7 @@ import (
 
 var credentialFields = map[string]map[string]bool{
 	"GMAIL":     {"login": false, "password": true, "phone": false},
-	"YOUTUBE":   {"note": false, "login": false, "password": true, "phone": false, "email": false},
+	"YOUTUBE":   {"note": false, "login": false, "password": true, "phone": false, "email": false, "access_email": false},
 	"INSTAGRAM": {"login": false, "password": true, "phone": false, "email": false},
 	"TIKTOK":    {"login": false, "password": true, "phone": false, "email": false},
 	"VK":        {"login": false, "password": true, "phone": false},
