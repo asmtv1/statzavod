@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
-import { api, type CreatorDetail, type CreatorStatus, type CreatorWorkStatus, type Platform, type PlatformConnection } from '../../shared/api/client'
+import { api, type CreatorDetail, type CreatorHistoryBlock, type CreatorHistoryChange, type CreatorStatus, type CreatorWorkStatus, type Platform, type PlatformConnection } from '../../shared/api/client'
 import styles from './CreatorDetailPage.module.scss'
 import statusStyles from './CreatorStatus.module.scss'
 
@@ -70,6 +70,97 @@ function credentialKey(section: string, field: string) {
   return `${section}:${field}`
 }
 
+const historyBlockTitles: Record<CreatorHistoryBlock, string> = {
+  PROFILE: 'История профиля',
+  WORK: 'История работ',
+  CREDENTIALS: 'История доступов и аккаунтов',
+}
+
+const profileHistoryLabels: Record<string, string> = {
+  firstName: 'Имя',
+  lastName: 'Фамилия',
+  middleName: 'Отчество',
+  displayName: 'Отображаемое имя',
+  status: 'Статус',
+  company: 'Компания',
+  telegramUsername: 'Telegram',
+  internalNote: 'Внутренний комментарий',
+}
+
+const workHistoryLabels: Record<string, string> = { status: 'Состояние', comment: 'Описание задачи' }
+const creatorStatusLabels: Record<string, string> = { ACTIVE: 'Активен', ON_LEAVE: 'В отпуске', DISMISSED: 'Уволен' }
+const workStatusLabels: Record<string, string> = { OK: 'Всё ок', NEEDS_ATTENTION: 'Нужны работы', IN_PROGRESS: 'В работе' }
+const historyDateFormatter = new Intl.DateTimeFormat('ru-RU', { dateStyle: 'medium', timeStyle: 'short' })
+
+function historyFieldLabel(block: CreatorHistoryBlock, change: CreatorHistoryChange) {
+  if (block === 'PROFILE') return profileHistoryLabels[change.fieldKey] ?? change.fieldKey
+  if (block === 'WORK') return workHistoryLabels[change.fieldKey] ?? change.fieldKey
+  const section = credentialSections.find(item => item.id === change.section)
+  const field = section?.fields.find(item => item.key === change.fieldKey)
+  return `${section?.name ?? change.section} · ${field?.label ?? change.fieldKey}`
+}
+
+function formatHistoryValue(block: CreatorHistoryBlock, change: CreatorHistoryChange, value: string | undefined) {
+  if (change.fieldKey === 'status') {
+    return block === 'PROFILE' ? creatorStatusLabels[value ?? ''] ?? value : workStatusLabels[value ?? ''] ?? value
+  }
+  if (block === 'PROFILE' && change.fieldKey === 'telegramUsername' && value) return `@${value}`
+  return value
+}
+
+function CreatorHistory({ creatorID, block }: { creatorID: string; block: CreatorHistoryBlock }) {
+  const [open, setOpen] = useState(false)
+  const [revealed, setRevealed] = useState<Record<string, string>>({})
+  const history = useQuery({
+    queryKey: ['creator-history', creatorID, block],
+    queryFn: () => api.creatorHistory(creatorID, block),
+    enabled: open,
+  })
+  const reveal = useMutation({
+    mutationFn: ({ changeID, side }: { changeID: string; side: 'old'|'new'; key: string }) => api.revealCreatorHistoryCredential(creatorID, changeID, side),
+    onSuccess: ({ value }, variables) => setRevealed(current => ({ ...current, [variables.key]: value })),
+  })
+  const close = () => {
+    setOpen(false)
+    setRevealed({})
+  }
+  const renderValue = (change: CreatorHistoryChange, side: 'old'|'new') => {
+    const present = side === 'old' ? change.oldPresent : change.newPresent
+    if (!present) return <span className={styles.historyEmpty}>Не заполнено</span>
+    if (!change.isSecret) {
+      const value = formatHistoryValue(block, change, side === 'old' ? change.oldValue : change.newValue)
+      return <strong>{value || 'Не заполнено'}</strong>
+    }
+    const key = `${change.id}:${side}`
+    const value = revealed[key]
+    return <div className={styles.historySecret}>
+      <strong>{value ?? '••••••••••••'}</strong>
+      {value === undefined
+        ? <button type="button" onClick={() => reveal.mutate({ changeID: change.id, side, key })} disabled={reveal.isPending}>Показать</button>
+        : <button type="button" onClick={() => navigator.clipboard.writeText(value)}>Скопировать</button>}
+    </div>
+  }
+
+  return <>
+    <button type="button" className={styles.historyButton} onClick={() => setOpen(true)}>История</button>
+    {open ? <div className={styles.historyBackdrop} role="presentation" onMouseDown={close}>
+      <div className={styles.historyDialog} role="dialog" aria-modal="true" aria-label={historyBlockTitles[block]} onMouseDown={event => event.stopPropagation()}>
+        <header><div><span>АРХИВ ИЗМЕНЕНИЙ</span><h2>{historyBlockTitles[block]}</h2></div><button type="button" aria-label="Закрыть историю" onClick={close}>×</button></header>
+        <div className={styles.historyBody}>
+          {history.isPending ? <p className={styles.empty}>Загружаем историю…</p> : history.isError ? <p className={styles.error}>Не удалось загрузить историю: {history.error.message}</p> : history.data.items.length === 0 ? <div className={styles.historyBlank}><strong>Изменений пока нет</strong><p>Здесь появятся прежние и новые значения после следующего редактирования.</p></div> : history.data.items.map(event => <article className={styles.historyEvent} key={event.id}>
+            <div className={styles.historyMeta}><time>{historyDateFormatter.format(new Date(event.changedAt))}</time><span>{event.changedBy}</span></div>
+            <div className={styles.historyChanges}>{event.changes.map(change => <div className={styles.historyChange} key={change.id}>
+              <h3>{historyFieldLabel(block, change)}</h3>
+              <div><span>Было</span>{renderValue(change, 'old')}</div>
+              <div><span>Стало</span>{renderValue(change, 'new')}</div>
+            </div>)}</div>
+          </article>)}
+        </div>
+      </div>
+    </div> : null}
+  </>
+}
+
 function CreatorProfile({ creator, creatorID }: { creator: CreatorDetail; creatorID: string }) {
   const client = useQueryClient()
   const companies = useQuery({ queryKey: ['companies'], queryFn: api.companies })
@@ -112,7 +203,7 @@ function CreatorProfile({ creator, creatorID }: { creator: CreatorDetail; creato
   return <section className={styles.profile}>
     <div className={styles.sectionHead}>
       <div><h2>Профиль креатора</h2><p>Основные данные и быстрые контакты.</p></div>
-      {!editing && <button className={styles.secondaryButton} onClick={() => setEditing(true)}>Редактировать</button>}
+      <div className={styles.inlineActions}><CreatorHistory creatorID={creatorID} block="PROFILE"/>{!editing ? <button className={styles.secondaryButton} onClick={() => setEditing(true)}>Редактировать</button> : null}</div>
     </div>
     {editing ? <form className={styles.profileForm} onSubmit={(event) => { event.preventDefault(); update.mutate() }}>
       <label>Имя<input required value={form.firstName} onChange={(event) => setForm({ ...form, firstName: event.target.value })}/></label>
@@ -163,16 +254,16 @@ function CreatorWork({ creator, creatorID }: { creator: CreatorDetail; creatorID
   return <section className={styles.workPanel}>
     <div className={styles.sectionHead}>
       <div><h2>Работы по креатору</h2><p>Текущее состояние карточки и задачи, которые требуют внимания.</p></div>
-      {!editing ? <button className={styles.secondaryButton} onClick={() => setEditing(true)}>Редактировать</button> : null}
+      <div className={styles.inlineActions}><CreatorHistory creatorID={creatorID} block="WORK"/>{!editing ? <button className={styles.secondaryButton} onClick={() => setEditing(true)}>Редактировать</button> : null}</div>
     </div>
     {editing ? <form className={styles.workForm} onSubmit={event => { event.preventDefault(); update.mutate() }}>
-      <label>Состояние<select className={statusStyles.select} value={status} onChange={event => { const next = event.target.value as CreatorWorkStatus; setStatus(next); if (next === 'OK') setComment('') }}><option value="OK">Всё ок</option><option value="NEEDS_ATTENTION">Нужны работы</option></select></label>
-      {status === 'NEEDS_ATTENTION' ? <label>Что нужно исправить<textarea required rows={4} placeholder="Опишите, что не так и какие работы нужны" value={comment} onChange={event => setComment(event.target.value)}/></label> : null}
+      <label>Состояние<select className={statusStyles.select} value={status} onChange={event => { const next = event.target.value as CreatorWorkStatus; setStatus(next); if (next === 'OK') setComment('') }}><option value="OK">Всё ок</option><option value="NEEDS_ATTENTION">Нужны работы</option><option value="IN_PROGRESS">В работе</option></select></label>
+      {status !== 'OK' ? <label>{status === 'IN_PROGRESS' ? 'Что сейчас в работе' : 'Что нужно исправить'}<textarea required rows={4} placeholder={status === 'IN_PROGRESS' ? 'Опишите задачу, которую вы взяли в работу' : 'Опишите, что не так и какие работы нужны'} value={comment} onChange={event => setComment(event.target.value)}/></label> : null}
       {update.isError ? <p className={styles.error}>{update.error.message}</p> : null}
       <div className={styles.formActions}><button type="button" className={styles.ghostButton} onClick={cancel}>Отмена</button><button className={styles.primaryButton} disabled={update.isPending}>{update.isPending ? 'Сохраняем…' : 'Сохранить'}</button></div>
     </form> : <div className={styles.workSummary}>
-      <strong className={creator.workStatus === 'OK' ? styles.workOk : styles.workAttention}>{creator.workStatus === 'OK' ? 'Всё ок' : 'Нужны работы'}</strong>
-      {creator.workStatus === 'NEEDS_ATTENTION' ? <p>{creator.workComment}</p> : <p>По креатору сейчас ничего делать не нужно.</p>}
+      <strong className={creator.workStatus === 'OK' ? styles.workOk : creator.workStatus === 'IN_PROGRESS' ? styles.workInProgress : styles.workAttention}>{workStatusLabels[creator.workStatus]}</strong>
+      {creator.workStatus !== 'OK' ? <p>{creator.workComment}</p> : <p>По креатору сейчас ничего делать не нужно.</p>}
     </div>}
   </section>
 }
@@ -217,7 +308,7 @@ function CredentialVault({ creatorID }: { creatorID: string }) {
   return <section className={styles.credentials}>
     <div className={styles.sectionHead}>
       <div><h2>Доступы и аккаунты</h2><p>Данные из рабочей таблицы. Секреты зашифрованы и раскрываются только администратору.</p></div>
-      {!editing ? <button className={styles.secondaryButton} onClick={() => setEditing(true)}>Редактировать доступы</button> : <div className={styles.inlineActions}><button className={styles.ghostButton} onClick={() => setEditing(false)}>Отмена</button><button className={styles.primaryButton} onClick={() => save.mutate()} disabled={save.isPending}>{save.isPending ? 'Сохраняем…' : 'Сохранить'}</button></div>}
+      <div className={styles.inlineActions}><CreatorHistory creatorID={creatorID} block="CREDENTIALS"/>{!editing ? <button className={styles.secondaryButton} onClick={() => setEditing(true)}>Редактировать доступы</button> : <><button className={styles.ghostButton} onClick={() => setEditing(false)}>Отмена</button><button className={styles.primaryButton} onClick={() => save.mutate()} disabled={save.isPending}>{save.isPending ? 'Сохраняем…' : 'Сохранить'}</button></>}</div>
     </div>
     {credentials.isPending ? <p className={styles.empty}>Загружаем доступы…</p> : credentials.isError ? <p className={styles.error}>{credentials.error.message}</p> : <div className={styles.credentialSections}>
       {credentialSections.map(section => <article className={styles.credentialSection} key={section.id}>

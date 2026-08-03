@@ -59,8 +59,23 @@ paths:
     patch:
       summary: Update creator work status and comment
       parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
-      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [status], properties: { status: { type: string, enum: [OK, NEEDS_ATTENTION] }, comment: { type: string } } } } } }
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [status], properties: { status: { type: string, enum: [OK, NEEDS_ATTENTION, IN_PROGRESS] }, comment: { type: string } } } } } }
       responses: { '204': { description: Updated }, '400': { $ref: '#/components/responses/Problem' }, '404': { $ref: '#/components/responses/Problem' } }
+  /creators/{id}/history:
+    get:
+      summary: List creator field changes for one card block
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: block, in: query, required: true, schema: { type: string, enum: [PROFILE, WORK, CREDENTIALS] } }
+      responses: { '200': { description: Change history }, '400': { $ref: '#/components/responses/Problem' }, '404': { $ref: '#/components/responses/Problem' } }
+  /creators/{id}/history/changes/{changeId}/reveal:
+    post:
+      summary: Reveal an encrypted historic credential value (admin only)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: changeId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [side], properties: { side: { type: string, enum: [old, new] } } } } } }
+      responses: { '200': { description: Decrypted value }, '403': { $ref: '#/components/responses/Problem' }, '404': { $ref: '#/components/responses/Problem' } }
   /analytics/summary:
     get: { summary: Dashboard KPI summary, responses: { '200': { description: Summary } } }
   /analytics/timeseries:
@@ -70,7 +85,7 @@ paths:
 components:
   schemas:
     LoginRequest: { type: object, required: [email, password], properties: { email: { type: string, format: email }, password: { type: string, format: password } } }
-    CreatorInput: { type: object, required: [firstName, lastName], properties: { firstName: { type: string }, lastName: { type: string }, middleName: { type: string }, displayName: { type: string }, internalNote: { type: string }, companyId: { type: string, format: uuid, nullable: true }, workStatus: { type: string, enum: [OK, NEEDS_ATTENTION] }, workComment: { type: string } } }
+    CreatorInput: { type: object, required: [firstName, lastName], properties: { firstName: { type: string }, lastName: { type: string }, middleName: { type: string }, displayName: { type: string }, internalNote: { type: string }, companyId: { type: string, format: uuid, nullable: true }, workStatus: { type: string, enum: [OK, NEEDS_ATTENTION, IN_PROGRESS] }, workComment: { type: string } } }
     Problem: { type: object, required: [title, status], properties: { type: { type: string }, title: { type: string }, status: { type: integer }, detail: { type: string } } }
   responses:
     Problem: { description: RFC 7807-style error, content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } } }

@@ -94,6 +94,7 @@
   line-height: 1.45;
 }
 .secondaryButton,
+.historyButton,
 .ghostButton,
 .primaryButton,
 .credentialValue button,
@@ -106,6 +107,7 @@
   cursor: pointer;
 }
 .secondaryButton,
+.historyButton,
 .credentialValue button {
   color: #e8c879;
   background: rgb(229 184 106 / 9%);
@@ -163,9 +165,10 @@ button:disabled {
 .workForm textarea { width: 100%; color: var(--text); background: #181a1a; border: 1px solid var(--border); border-radius: .5rem; padding: .65rem .7rem; resize: vertical; font: inherit; }
 .workSummary { display: flex; align-items: center; gap: .8rem; margin-top: 1rem; padding: .9rem; background: rgb(0 0 0 / 12%); border: 1px solid rgb(244 235 218 / 8%); border-radius: .75rem; }
 .workSummary p { margin: 0; color: var(--muted); font-size: .85rem; line-height: 1.45; }
-.workOk,.workAttention { width: max-content; flex: 0 0 auto; border-radius: .4rem; padding: .3rem .5rem; font-size: .76rem; font-weight: 700; }
+.workOk,.workAttention,.workInProgress { width: max-content; flex: 0 0 auto; border-radius: .4rem; padding: .3rem .5rem; font-size: .76rem; font-weight: 700; }
 .workOk { color: #bcefd0; background: rgb(156 229 189 / 12%); border: 1px solid rgb(156 229 189 / 18%); }
 .workAttention { color: #ffb4a9; background: rgb(255 155 143 / 8%); border: 1px solid rgb(255 155 143 / 20%); }
+.workInProgress { color: #ffe29a; background: rgb(229 184 106 / 12%); border: 1px solid rgb(229 184 106 / 25%); }
 .profileForm {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -581,6 +584,79 @@ button:disabled {
   color: var(--text);
   background: rgb(255 255 255 / 7%);
 }
+.historyBackdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  background: rgb(6 7 7 / 72%);
+  backdrop-filter: blur(8px);
+}
+.historyDialog {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  width: min(100%, 52rem);
+  max-height: min(48rem, calc(100vh - 2rem));
+  overflow: hidden;
+  background: linear-gradient(145deg, #313434, #202222);
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  box-shadow: 0 25px 60px rgb(0 0 0 / 55%);
+}
+.historyDialog > header {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1.15rem 1.25rem;
+  border-bottom: 1px solid var(--border);
+}
+.historyDialog > header span {
+  color: var(--gold);
+  font-size: .64rem;
+  font-weight: 750;
+  letter-spacing: .15em;
+}
+.historyDialog > header h2 { margin: .25rem 0 0; font-size: 1.2rem; }
+.historyDialog > header button {
+  padding: 0;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  font: inherit;
+  font-size: 1.55rem;
+  line-height: 1;
+}
+.historyBody { overflow: auto; padding: 1rem 1.25rem 1.25rem; }
+.historyBlank { padding: 3.5rem 1rem; text-align: center; }
+.historyBlank p { max-width: 29rem; margin: .5rem auto 0; color: var(--muted); line-height: 1.5; }
+.historyEvent { padding: 0 0 1rem; border-bottom: 1px solid var(--border); }
+.historyEvent + .historyEvent { padding-top: 1rem; }
+.historyEvent:last-child { padding-bottom: 0; border-bottom: 0; }
+.historyMeta { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: .7rem; }
+.historyMeta time { color: var(--text); font-size: .8rem; font-weight: 700; }
+.historyMeta span { color: var(--muted); font-size: .76rem; }
+.historyChanges { display: grid; gap: .6rem; }
+.historyChange {
+  display: grid;
+  grid-template-columns: minmax(8rem, .8fr) repeat(2, minmax(0, 1fr));
+  gap: .7rem;
+  padding: .75rem;
+  background: rgb(0 0 0 / 13%);
+  border: 1px solid rgb(244 235 218 / 8%);
+  border-radius: .7rem;
+}
+.historyChange h3 { align-self: center; margin: 0; font-size: .82rem; }
+.historyChange > div { display: grid; align-content: start; min-width: 0; gap: .22rem; }
+.historyChange > div > span { color: var(--muted); font-size: .68rem; text-transform: uppercase; letter-spacing: .08em; }
+.historyChange > div > strong { overflow-wrap: anywhere; font-size: .8rem; font-weight: 600; line-height: 1.4; white-space: pre-wrap; }
+.historyEmpty { color: #77746e !important; font-size: .8rem !important; text-transform: none !important; letter-spacing: 0 !important; }
+.historySecret { display: flex !important; align-items: center; justify-content: space-between; grid-template-columns: none !important; gap: .45rem !important; }
+.historySecret strong { min-width: 0; overflow-wrap: anywhere; font-size: .8rem; }
+.historySecret button { flex: none; padding: .3rem .45rem; color: #e8c879; background: rgb(229 184 106 / 9%); border: 1px solid rgb(229 184 106 / 22%); border-radius: .4rem; cursor: pointer; font: inherit; font-size: .68rem; font-weight: 700; }
 @media (max-width: 800px) {
   .page > header,
   .sectionHead,
@@ -617,6 +693,8 @@ button:disabled {
   .table article {
     grid-template-columns: 1fr;
   }
+  .historyChange { grid-template-columns: 1fr 1fr; }
+  .historyChange h3 { grid-column: 1/-1; }
 }
 @media (max-width: 600px) {
   .profileForm {
@@ -642,4 +720,7 @@ button:disabled {
     align-items: stretch;
     flex-direction: column;
   }
+  .historyMeta { align-items: start; flex-direction: column; gap: .25rem; }
+  .historyChange { grid-template-columns: 1fr; }
+  .historyChange h3 { grid-column: auto; }
 }

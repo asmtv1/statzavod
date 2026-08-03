@@ -1,7 +1,7 @@
 export type Kpi = { key: string; label: string; value: number }
 export type Summary = { kpis: Kpi[]; freshness: { status: string; message: string } }
 export type CreatorStatus = 'ACTIVE'|'ON_LEAVE'|'DISMISSED'
-export type CreatorWorkStatus = 'OK'|'NEEDS_ATTENTION'
+export type CreatorWorkStatus = 'OK'|'NEEDS_ATTENTION'|'IN_PROGRESS'
 export type Company = { id:string; name:string; creatorCount:number }
 export type Creator = { id:string; firstName:string; lastName:string; middleName:string; displayName:string; status:CreatorStatus; createdAt:string; telegramUsername:string; companyId:string; companyName:string; workStatus:CreatorWorkStatus; workComment:string }
 export type Timeseries = { items: { date:string; views:number }[] }
@@ -9,6 +9,9 @@ export type Publication = { id:string; title:string | null; platform:string; pub
 export type CreatorAnalytics = { creatorId:string; creatorName:string; period:{from:string;to:string}; kpis:Kpi[]; publications:{id:string;title:string;platform:string;publishedAt:string;views:number;likes:number}[] }
 export type CreatorDetail = Creator & { internalNote:string; contacts:{id:string;kind:string;value:string;label:string;isPrimary:boolean}[] }
 export type CreatorCredential = { id:string; section:string; fieldKey:string; isSecret:boolean; hasValue:boolean; value?:string; updatedAt:string }
+export type CreatorHistoryBlock = 'PROFILE'|'WORK'|'CREDENTIALS'
+export type CreatorHistoryChange = { id:string; section:string; fieldKey:string; isSecret:boolean; oldPresent:boolean; newPresent:boolean; oldValue?:string; newValue?:string }
+export type CreatorHistoryEvent = { id:string; changedAt:string; changedBy:string; changes:CreatorHistoryChange[] }
 export type PlatformAccount = {id:string;platform:string;username:string;displayName:string;status:string;profileUrl:string}
 export type Platform = 'YOUTUBE' | 'INSTAGRAM' | 'TIKTOK' | 'VK'
 export type PlatformConnection = {id:string;platform:Platform;username:string;displayName:string;status:string;oauthStatus:string;avatarUrl:string;profileUrl:string;scopes:string[];lastSyncedAt:string | null}
@@ -49,6 +52,8 @@ export const api = {
   creator:(id:string)=>request<CreatorDetail>(`/creators/${id}`),
   updateCreator:(id:string,payload:Record<string,string>)=>request<void>(`/creators/${id}`,{method:'PATCH',body:JSON.stringify(payload)}),
   updateCreatorWorkStatus:(id:string,status:CreatorWorkStatus,comment:string)=>request<void>(`/creators/${id}/work-status`,{method:'PATCH',body:JSON.stringify({status,comment})}),
+  creatorHistory:(id:string,block:CreatorHistoryBlock)=>request<{items:CreatorHistoryEvent[]}>(`/creators/${id}/history?block=${encodeURIComponent(block)}`),
+  revealCreatorHistoryCredential:(id:string,changeID:string,side:'old'|'new')=>request<{value:string}>(`/creators/${id}/history/changes/${changeID}/reveal`,{method:'POST',body:JSON.stringify({side})}),
   creatorCredentials:(id:string)=>request<{items:CreatorCredential[]}>(`/creators/${id}/credentials`),
   saveCreatorCredentials:(id:string,items:{section:string;fieldKey:string;value:string}[])=>request<void>(`/creators/${id}/credentials`,{method:'PUT',body:JSON.stringify({items})}),
   revealCreatorCredential:(id:string,credentialID:string)=>request<{value:string}>(`/creators/${id}/credentials/${credentialID}/reveal`,{method:'POST'}),
