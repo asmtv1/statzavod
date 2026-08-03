@@ -12,14 +12,14 @@ const platformOptions: { id: Platform; name: string; hint: string }[] = [
   { id: 'VK', name: 'VK', hint: 'Профиль, видео и клипы' },
 ]
 
-type CredentialField = { key: string; label: string; secret?: boolean }
+type CredentialField = { key: string; label: string; secret?: boolean; channelLink?: boolean }
 type CredentialSection = { id: string; name: string; fields: CredentialField[]; legacy?: boolean }
 
 const credentialSections: CredentialSection[] = [
   { id: 'GMAIL', name: 'Gmail', fields: [{ key: 'login', label: 'Логин' }, { key: 'password', label: 'Пароль', secret: true }, { key: 'phone', label: 'Телефон' }] },
-  { id: 'YOUTUBE', name: 'YouTube', fields: [{ key: 'note', label: 'Способ доступа' }, { key: 'email', label: 'Почта аккаунта YouTube' }, { key: 'access_email', label: 'Почта креатора для доступа' }, { key: 'phone', label: 'Телефон' }] },
-  { id: 'INSTAGRAM', name: 'Instagram', fields: [{ key: 'login', label: 'Логин' }, { key: 'password', label: 'Пароль', secret: true }, { key: 'phone', label: 'Телефон' }, { key: 'email', label: 'Почта' }] },
-  { id: 'TIKTOK', name: 'TikTok', fields: [{ key: 'login', label: 'Логин' }, { key: 'password', label: 'Пароль', secret: true }, { key: 'phone', label: 'Телефон' }, { key: 'email', label: 'Почта' }] },
+  { id: 'YOUTUBE', name: 'YouTube', fields: [{ key: 'note', label: 'Способ доступа' }, { key: 'email', label: 'Почта аккаунта YouTube' }, { key: 'channel_url', label: 'Активная ссылка на канал', channelLink: true }, { key: 'access_email', label: 'Почта креатора для доступа' }, { key: 'phone', label: 'Телефон' }] },
+  { id: 'INSTAGRAM', name: 'Instagram', fields: [{ key: 'login', label: 'Логин' }, { key: 'channel_url', label: 'Активная ссылка на канал', channelLink: true }, { key: 'password', label: 'Пароль', secret: true }, { key: 'phone', label: 'Телефон' }, { key: 'email', label: 'Почта' }] },
+  { id: 'TIKTOK', name: 'TikTok', fields: [{ key: 'login', label: 'Логин' }, { key: 'channel_url', label: 'Активная ссылка на канал', channelLink: true }, { key: 'password', label: 'Пароль', secret: true }, { key: 'phone', label: 'Телефон' }, { key: 'email', label: 'Почта' }] },
   { id: 'VK', name: 'VK · старые данные', legacy: true, fields: [{ key: 'login', label: 'Логин' }, { key: 'password', label: 'Пароль', secret: true }, { key: 'phone', label: 'Телефон' }] },
 ]
 
@@ -68,6 +68,14 @@ function connectionStatus(status: string) {
 
 function credentialKey(section: string, field: string) {
   return `${section}:${field}`
+}
+
+function defaultChannelURL(section: string, login: string | undefined) {
+  const username = login?.trim().replace(/^@/, '')
+  if (!username) return ''
+  if (section === 'INSTAGRAM') return `https://www.instagram.com/${username}/`
+  if (section === 'TIKTOK') return `https://www.tiktok.com/@${username}`
+  return ''
 }
 
 const historyBlockTitles: Record<CreatorHistoryBlock, string> = {
@@ -377,9 +385,10 @@ function CredentialVault({ creatorID }: { creatorID: string }) {
           const key = credentialKey(section.id, field.key)
           const item = itemMap.get(key)
           const shownValue = field.secret ? revealed[key] : item?.value
+          const channelURL = field.channelLink ? shownValue || defaultChannelURL(section.id, values[credentialKey(section.id, 'login')]) : ''
           return <div className={styles.credentialRow} key={field.key}>
             <span>{field.label}</span>
-            {editing ? <input type={field.secret ? 'password' : 'text'} name={`creator-credential-${section.id.toLowerCase()}-${field.key}`} autoComplete={field.secret ? 'new-password' : 'off'} data-lpignore="true" data-1p-ignore="true" spellCheck={false} value={values[key] ?? ''} placeholder={field.secret && item?.hasValue ? 'Сохранено — введите для замены' : 'Не заполнено'} onChange={(event) => setValues(current => ({ ...current, [key]: event.target.value }))}/> : <div className={styles.credentialValue}><strong className={!item?.hasValue ? styles.missing : ''}>{shownValue || (item?.hasValue ? '••••••••••••' : '—')}</strong>{field.secret && item?.id && !revealed[key] && <button onClick={() => reveal.mutate({ id: item.id, key })} disabled={reveal.isPending}>Показать</button>}{field.secret && revealed[key] && <button onClick={() => setRevealed(current => { const next = { ...current }; delete next[key]; return next })}>Скрыть</button>}</div>}
+            {editing ? <input type={field.secret ? 'password' : field.channelLink ? 'url' : 'text'} name={`creator-credential-${section.id.toLowerCase()}-${field.key}`} autoComplete={field.secret ? 'new-password' : 'off'} data-lpignore="true" data-1p-ignore="true" spellCheck={false} value={values[key] ?? ''} placeholder={field.channelLink ? defaultChannelURL(section.id, values[credentialKey(section.id, 'login')]) || 'https://...' : field.secret && item?.hasValue ? 'Сохранено — введите для замены' : 'Не заполнено'} onChange={(event) => setValues(current => ({ ...current, [key]: event.target.value }))}/> : <div className={styles.credentialValue}>{field.channelLink && channelURL ? <a className={styles.channelLink} href={channelURL} target="_blank" rel="noreferrer">{channelURL} ↗</a> : <strong className={!item?.hasValue ? styles.missing : ''}>{shownValue || (item?.hasValue ? '••••••••••••' : '—')}</strong>}{field.secret && item?.id && !revealed[key] && <button onClick={() => reveal.mutate({ id: item.id, key })} disabled={reveal.isPending}>Показать</button>}{field.secret && revealed[key] && <button onClick={() => setRevealed(current => { const next = { ...current }; delete next[key]; return next })}>Скрыть</button>}</div>}
           </div>
         })}</div>
       </article>)}
