@@ -261,8 +261,8 @@ func (s *Server) updateCreatorWorkStatus(w http.ResponseWriter, r *http.Request)
 			problem(w, http.StatusInternalServerError, "update failed", "could not save creator work history")
 			return
 		}
-		if _, err = tx.Exec(r.Context(), `INSERT INTO audit_logs(organization_id,actor_id,action,entity_type,entity_id,metadata) VALUES($1,$2,'UPDATE_WORK_STATUS','CREATOR',$3,jsonb_build_object('status',$4))`, p.OrganizationID, p.ID, id, status); err != nil {
-			problem(w, http.StatusInternalServerError, "update failed", "could not save audit record")
+		if _, err = tx.Exec(r.Context(), `INSERT INTO audit_logs(organization_id,actor_id,action,entity_type,entity_id,metadata) VALUES($1,$2,'UPDATE_WORK_STATUS','CREATOR',$3,jsonb_build_object('status',$4::text))`, p.OrganizationID, p.ID, id, status); err != nil {
+			problem(w, http.StatusInternalServerError, "update failed", "could not save work status history")
 			return
 		}
 	}
@@ -417,8 +417,8 @@ func (s *Server) saveCreatorCredentials(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if len(changes) > 0 {
-		if _, err = tx.Exec(r.Context(), `INSERT INTO audit_logs(organization_id,actor_id,action,entity_type,entity_id,metadata) VALUES($1,$2,'UPDATE_CREDENTIALS','CREATOR',$3,jsonb_build_object('fields',$4))`, p.OrganizationID, p.ID, id, len(changes)); err != nil {
-			problem(w, http.StatusInternalServerError, "save failed", "could not save audit record")
+		if _, err = tx.Exec(r.Context(), `INSERT INTO audit_logs(organization_id,actor_id,action,entity_type,entity_id,metadata) VALUES($1,$2,'UPDATE_CREDENTIALS','CREATOR',$3,jsonb_build_object('fields',$4::integer))`, p.OrganizationID, p.ID, id, len(changes)); err != nil {
+			problem(w, http.StatusInternalServerError, "save failed", "could not save credentials history")
 			return
 		}
 	}
@@ -452,7 +452,7 @@ func (s *Server) revealCreatorCredential(w http.ResponseWriter, r *http.Request)
 		problem(w, http.StatusInternalServerError, "reveal failed", "could not decrypt credential")
 		return
 	}
-	_, _ = s.pool.Exec(r.Context(), `INSERT INTO audit_logs(organization_id,actor_id,action,entity_type,entity_id,metadata) VALUES($1,$2,'REVEAL_CREDENTIAL','CREATOR',$3,jsonb_build_object('credentialId',$4))`, p.OrganizationID, p.ID, creatorID, credentialID)
+	_, _ = s.pool.Exec(r.Context(), `INSERT INTO audit_logs(organization_id,actor_id,action,entity_type,entity_id,metadata) VALUES($1,$2,'REVEAL_CREDENTIAL','CREATOR',$3,jsonb_build_object('credentialId',$4::text))`, p.OrganizationID, p.ID, creatorID, credentialID)
 	writeJSON(w, http.StatusOK, map[string]string{"value": string(plain)})
 }
 
@@ -556,6 +556,6 @@ func (s *Server) revealCreatorHistoryCredential(w http.ResponseWriter, r *http.R
 		problem(w, http.StatusInternalServerError, "reveal failed", "could not decrypt credential history")
 		return
 	}
-	_, _ = s.pool.Exec(r.Context(), `INSERT INTO audit_logs(organization_id,actor_id,action,entity_type,entity_id,metadata) VALUES($1,$2,'REVEAL_CREDENTIAL_HISTORY','CREATOR',$3,jsonb_build_object('changeId',$4,'side',$5))`, p.OrganizationID, p.ID, creatorID, changeID, in.Side)
+	_, _ = s.pool.Exec(r.Context(), `INSERT INTO audit_logs(organization_id,actor_id,action,entity_type,entity_id,metadata) VALUES($1,$2,'REVEAL_CREDENTIAL_HISTORY','CREATOR',$3,jsonb_build_object('changeId',$4::text,'side',$5::text))`, p.OrganizationID, p.ID, creatorID, changeID, in.Side)
 	writeJSON(w, http.StatusOK, map[string]string{"value": string(plain)})
 }
