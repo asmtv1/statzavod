@@ -652,6 +652,8 @@ button:disabled {
 .historyChange h3 { align-self: center; margin: 0; font-size: .82rem; }
 .historyChange > div { display: grid; align-content: start; min-width: 0; gap: .22rem; }
 .historyChange > div > span { color: var(--muted); font-size: .68rem; text-transform: uppercase; letter-spacing: .08em; }
+.historyValueLabel { display: flex; align-items: center; flex-wrap: wrap; gap: .3rem; }
+.historyValueLabel time { color: #d7b978; font-size: inherit; text-transform: none; letter-spacing: 0; }
 .historyChange > div > strong { overflow-wrap: anywhere; font-size: .8rem; font-weight: 600; line-height: 1.4; white-space: pre-wrap; }
 .historyEmpty { color: #77746e !important; font-size: .8rem !important; text-transform: none !important; letter-spacing: 0 !important; }
 .historySecret { display: flex !important; align-items: center; justify-content: space-between; grid-template-columns: none !important; gap: .45rem !important; }

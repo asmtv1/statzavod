@@ -91,6 +91,7 @@ const workHistoryLabels: Record<string, string> = { status: 'Состояние'
 const creatorStatusLabels: Record<string, string> = { ACTIVE: 'Активен', ON_LEAVE: 'В отпуске', DISMISSED: 'Уволен' }
 const workStatusLabels: Record<string, string> = { OK: 'Всё ок', NEEDS_ATTENTION: 'Нужны работы', IN_PROGRESS: 'В работе' }
 const historyDateFormatter = new Intl.DateTimeFormat('ru-RU', { dateStyle: 'medium', timeStyle: 'short' })
+const historyValueDateFormatter = new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
 
 function historyFieldLabel(block: CreatorHistoryBlock, change: CreatorHistoryChange) {
   if (block === 'PROFILE') return profileHistoryLabels[change.fieldKey] ?? change.fieldKey
@@ -152,7 +153,7 @@ function CreatorHistory({ creatorID, block }: { creatorID: string; block: Creato
             <div className={styles.historyChanges}>{event.changes.map(change => <div className={styles.historyChange} key={change.id}>
               <h3>{historyFieldLabel(block, change)}</h3>
               <div><span>Было</span>{renderValue(change, 'old')}</div>
-              <div><span>Стало</span>{renderValue(change, 'new')}</div>
+              <div><span className={styles.historyValueLabel}>Стало <time dateTime={event.changedAt}>· {historyValueDateFormatter.format(new Date(event.changedAt))}</time></span>{renderValue(change, 'new')}</div>
             </div>)}</div>
           </article>)}
         </div>
