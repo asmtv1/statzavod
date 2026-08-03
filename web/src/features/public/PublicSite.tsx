@@ -8,24 +8,24 @@ const copy = {
   ru: {
     product: 'ПЛАТФОРМА ДЛЯ АНАЛИТИКИ КОНТЕНТА',
     title: 'Данные, которые двигают контент вперёд.',
-    lead: 'Statzavod объединяет статистику по каналам, креаторам и кампаниям в единую систему. Команды и агентства быстрее видят результат, находят точки роста и уверенно масштабируют контент на новых платформах.',
-    signIn: 'Войти в кабинет', signUp: 'Зарегистрироваться', features: 'Возможности', security: 'Безопасность', support: 'Поддержка',
+    lead: 'Statzavod помогает командам и креаторам подключать TikTok-аккаунты с согласия владельца и видеть профиль, статистику аккаунта и аналитику публичных видео в едином кабинете.',
+    signIn: 'Войти в кабинет', requestAccess: 'Запросить доступ', features: 'Возможности', security: 'Безопасность', support: 'Поддержка',
     featureTitle: 'Единая картина эффективности контента',
-    featureBody: 'Собирайте данные из ключевых платформ, сравнивайте креаторов и кампании, находите работающие форматы и принимайте решения на основе понятных показателей.',
+    featureBody: 'Подключайте TikTok-аккаунты с разрешения владельца, собирайте данные профиля и публичных видео, сравнивайте креаторов и кампании, находите работающие форматы.',
     securityTitle: 'Надёжная основа для ваших данных',
-    securityBody: 'Защищённые интеграции, разграничение доступов и прозрачное управление данными помогают командам работать уверенно на любом масштабе.',
-    supportTitle: 'Партнёрство на каждом этапе', supportBody: 'Помогаем запускать аналитику, выстраивать процессы и получать больше пользы от данных — от первой команды до большой сети креаторов.',
+    securityBody: 'Подключения выполняются через защищённую авторизацию TikTok. Мы запрашиваем только данные, необходимые для работы аналитики, а доступы можно отозвать.',
+    supportTitle: 'Поддержка и контакты', supportBody: 'По вопросам о сервисе, доступе к данным или конфиденциальности напишите нам — мы поможем разобраться.',
   },
   en: {
     product: 'CONTENT ANALYTICS PLATFORM',
     title: 'Data that moves content forward.',
-    lead: 'Statzavod brings channel, creator, and campaign data into one system. Teams and agencies can see performance sooner, find growth opportunities, and scale content confidently across new platforms.',
-    signIn: 'Sign in', signUp: 'Register', features: 'Features', security: 'Security', support: 'Support',
+    lead: 'Statzavod helps teams and creators connect TikTok accounts with the owner’s authorization and view profile, account statistics, and public video analytics in one workspace.',
+    signIn: 'Sign in', requestAccess: 'Request access', features: 'Features', security: 'Security', support: 'Support',
     featureTitle: 'One clear view of content performance',
-    featureBody: 'Bring together data from key platforms, compare creators and campaigns, identify winning formats, and make decisions with clear performance signals.',
+    featureBody: 'Connect authorized TikTok accounts, bring together profile and public-video data, compare creators and campaigns, and identify winning formats.',
     securityTitle: 'A dependable foundation for your data',
-    securityBody: 'Secure integrations, granular access controls, and transparent data management help teams operate confidently at any scale.',
-    supportTitle: 'A partner at every stage', supportBody: 'We help teams launch analytics, shape reliable workflows, and get more value from data — from the first creator to a global network.',
+    securityBody: 'Connections use TikTok’s secure authorization flow. We request only the data needed for analytics, and access can be revoked.',
+    supportTitle: 'Support and contacts', supportBody: 'For questions about the service, data access, or privacy, contact us and we will help.',
   },
 } as const
 
@@ -34,7 +34,7 @@ function Footer({ lang }: { lang: Language }) {
   const labels = lang === 'ru'
     ? { terms: 'Условия', privacy: 'Конфиденциальность', security: 'Безопасность', cookies: 'Cookies', consent: 'Согласие', deletion: 'Удаление данных' }
     : { terms: 'Terms', privacy: 'Privacy', security: 'Security', cookies: 'Cookies', consent: 'Consent', deletion: 'Data deletion' }
-  return <footer className={styles.footer}><span>© {new Date().getFullYear()} Statzavod</span><nav><Link to={`${prefix}/terms`}>{labels.terms}</Link><Link to={`${prefix}/privacy`}>{labels.privacy}</Link><Link to={`${prefix}/security-policy`}>{labels.security}</Link><Link to={`${prefix}/cookies`}>{labels.cookies}</Link><Link to={`${prefix}/personal-data-consent`}>{labels.consent}</Link><Link to={`${prefix}/data-deletion`}>{labels.deletion}</Link></nav></footer>
+  return <footer className={styles.footer}><div><span>© {new Date().getFullYear()} Statzavod</span><a className={styles.contact} href="mailto:asmtv1@yandex.ru">asmtv1@yandex.ru</a></div><nav><Link to={`${prefix}/terms`}>{labels.terms}</Link><Link to={`${prefix}/privacy`}>{labels.privacy}</Link><Link to={`${prefix}/security-policy`}>{labels.security}</Link><Link to={`${prefix}/cookies`}>{labels.cookies}</Link><Link to={`${prefix}/personal-data-consent`}>{labels.consent}</Link><Link to={`${prefix}/data-deletion`}>{labels.deletion}</Link></nav></footer>
 }
 
 function SupportVisual() {
@@ -70,7 +70,7 @@ export function PublicPage({ page = 'home', lang = 'ru' }: { page?: 'home' | 'fe
   const t = copy[lang]
   const prefix = lang === 'en' ? '/en' : ''
   const pageCopy = page === 'features' ? { eyebrow: t.features, title: t.featureTitle, body: t.featureBody } : page === 'security' ? { eyebrow: t.security, title: t.securityTitle, body: t.securityBody } : page === 'support' ? { eyebrow: t.support, title: t.supportTitle, body: t.supportBody } : { eyebrow: t.product, title: t.title, body: t.lead }
-  const hero = <section className={`${styles.hero} ${page !== 'home' ? visualStyles.compactHero : ''}`}><p>{pageCopy.eyebrow}</p><h1>{pageCopy.title}</h1><p className={styles.lead}>{pageCopy.body}</p>{page === 'home' && <div className={styles.heroActions}><Link className={styles.cta} to="/login">{t.signIn}</Link><Link className={styles.secondaryCta} to="/register">{t.signUp}</Link></div>}</section>
+  const hero = <section className={`${styles.hero} ${page !== 'home' ? visualStyles.compactHero : ''}`}><p>{pageCopy.eyebrow}</p><h1>{pageCopy.title}</h1><p className={styles.lead}>{pageCopy.body}</p>{page === 'home' && <div className={styles.heroActions}><Link className={styles.cta} to="/login">{t.signIn}</Link><Link className={styles.secondaryCta} to={`${prefix}/support`}>{t.requestAccess}</Link></div>}</section>
   const hasShowcase = page === 'features' || page === 'security'
-  return <main className={`${styles.page} ${page !== 'home' ? visualStyles.detailPage : ''} ${hasShowcase ? visualStyles.featurePage : ''}`}><header className={styles.header}><Link to={prefix || '/'} className={styles.brand}>STATZAVOD</Link><nav><Link to={`${prefix}/features`}>{t.features}</Link><Link to={`${prefix}/security`}>{t.security}</Link><Link to="/register" className={styles.register}>{t.signUp}</Link><Link to="/login" className={styles.login}>{t.signIn}</Link><Link to={lang === 'ru' ? '/en' : '/'} className={styles.language}>{lang === 'ru' ? 'EN' : 'RU'}</Link></nav></header>{page === 'home' ? <div className={launchStyles.homeScene}>{hero}<div className={launchStyles.heroArtwork}><img src="/statzavod-launch.png" alt="Ракета Statzavod взлетает среди потоков данных" /></div></div> : hasShowcase ? <DetailShowcase page={page} eyebrow={pageCopy.eyebrow} title={pageCopy.title} body={pageCopy.body} lang={lang} /> : hero}{page === 'support' && <SupportVisual/>} {page === 'home' && <section className={styles.cards}><article><h2>{t.features}</h2><p>{t.featureBody}</p></article><article><h2>{t.security}</h2><p>{t.securityBody}</p></article><article><h2>{t.support}</h2><p>{t.supportBody}</p></article></section>}{page === 'support' && <a className={styles.email} href="mailto:asmtv1@yandex.ru">asmtv1@yandex.ru</a>}<Footer lang={lang}/></main>
+  return <main className={`${styles.page} ${page !== 'home' ? visualStyles.detailPage : ''} ${hasShowcase ? visualStyles.featurePage : ''}`}><header className={styles.header}><Link to={prefix || '/'} className={styles.brand}>STATZAVOD</Link><nav><Link to={`${prefix}/features`}>{t.features}</Link><Link to={`${prefix}/security`}>{t.security}</Link><Link to={`${prefix}/support`}>{t.support}</Link><Link to={`${prefix}/support`} className={styles.register}>{t.requestAccess}</Link><Link to="/login" className={styles.login}>{t.signIn}</Link><Link to={lang === 'ru' ? '/en' : '/'} className={styles.language}>{lang === 'ru' ? 'EN' : 'RU'}</Link></nav></header>{page === 'home' ? <div className={launchStyles.homeScene}>{hero}<div className={launchStyles.heroArtwork}><img src="/statzavod-launch.png" alt="Ракета Statzavod взлетает среди потоков данных" /></div></div> : hasShowcase ? <DetailShowcase page={page} eyebrow={pageCopy.eyebrow} title={pageCopy.title} body={pageCopy.body} lang={lang} /> : hero}{page === 'support' && <><SupportVisual/><a className={styles.email} href="mailto:asmtv1@yandex.ru">asmtv1@yandex.ru</a></>} {page === 'home' && <section className={styles.cards}><article><h2>{t.features}</h2><p>{t.featureBody}</p></article><article><h2>{t.security}</h2><p>{t.securityBody}</p></article><article><h2>{t.support}</h2><p>{t.supportBody}</p><Link className={styles.contactLink} to={`${prefix}/support`}>{lang === 'ru' ? 'Связаться с нами' : 'Contact us'}</Link></article></section>}<Footer lang={lang}/></main>
 }

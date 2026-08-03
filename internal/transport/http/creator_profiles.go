@@ -186,7 +186,7 @@ func (s *Server) updateCreator(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, err = tx.Exec(r.Context(), `UPDATE creators SET first_name=$1,last_name=$2,middle_name=$3,display_name=$4,internal_note=$5,telegram_username=$6,status=$7::creator_status,company_id=$8,archived_at=CASE WHEN $7::text='DISMISSED' THEN COALESCE(archived_at,now()) ELSE NULL END,updated_at=now() WHERE id=$9 AND organization_id=$10`, firstName, lastName, middleName, displayName, internalNote, telegramUsername, status, companyID, id, p.OrganizationID); err != nil {
+	if _, err = tx.Exec(r.Context(), `UPDATE creators SET first_name=$1,last_name=$2,middle_name=$3,display_name=$4,internal_note=$5,telegram_username=$6,status=$7::creator_status,company_id=$8,updated_at=now() WHERE id=$9 AND organization_id=$10`, firstName, lastName, middleName, displayName, internalNote, telegramUsername, status, companyID, id, p.OrganizationID); err != nil {
 		problem(w, http.StatusInternalServerError, "update failed", "could not update creator")
 		return
 	}

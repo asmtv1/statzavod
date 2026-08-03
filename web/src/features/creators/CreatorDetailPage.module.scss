@@ -32,6 +32,47 @@
   align-items: center;
   gap: 0.65rem;
 }
+.archiveButton,
+.restoreButton {
+  padding: .67rem .9rem;
+  border-radius: .55rem;
+  font: inherit;
+  font-weight: 750;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.archiveButton {
+  color: #e8c879;
+  background: rgb(229 184 106 / 8%);
+  border: 1px solid rgb(229 184 106 / 24%);
+}
+.restoreButton {
+  color: #bcefd0;
+  background: rgb(156 229 189 / 12%);
+  border: 1px solid rgb(156 229 189 / 24%);
+}
+.archiveNotice {
+  display: flex;
+  align-items: center;
+  gap: .8rem;
+  padding: .85rem 1rem;
+  color: #e8c879;
+  background: rgb(229 184 106 / 8%);
+  border: 1px solid rgb(229 184 106 / 22%);
+  border-radius: .75rem;
+}
+.archiveNotice > span {
+  padding: .28rem .45rem;
+  color: #211e1a;
+  background: #e4b667;
+  border-radius: .35rem;
+  font-size: .68rem;
+  font-weight: 800;
+  letter-spacing: .08em;
+}
+.archiveNotice > div { display: grid; gap: .18rem; }
+.archiveNotice b { font-size: .86rem; }
+.archiveNotice small { color: var(--muted); font-size: .76rem; line-height: 1.4; }
 .export,
 .telegram {
   color: #1d1c19;
@@ -239,6 +280,19 @@ button:disabled {
   color: var(--muted);
   font-size: 0.72rem;
 }
+.credentialTitle .vkEditButton {
+  display: block;
+  margin-top: .75rem;
+  padding: .38rem .55rem;
+  color: #e8c879;
+  background: rgb(229 184 106 / 9%);
+  border: 1px solid rgb(229 184 106 / 22%);
+  border-radius: .42rem;
+  font: inherit;
+  font-size: .72rem;
+  font-weight: 700;
+  cursor: pointer;
+}
 .credentialRows {
   display: grid;
 }
@@ -257,10 +311,18 @@ button:disabled {
   color: var(--muted);
   font-size: 0.78rem;
 }
-.credentialRow > input {
+.credentialRow > input,
+.credentialRow > select {
   margin: 0.35rem 0.5rem;
   width: calc(100% - 1rem);
   padding: 0.52rem 0.65rem;
+}
+.credentialRow > select {
+  color: var(--text);
+  background: #181a1a;
+  border: 1px solid var(--border);
+  border-radius: .5rem;
+  font: inherit;
 }
 .credentialValue {
   display: flex;
@@ -281,6 +343,15 @@ button:disabled {
   padding: 0.4rem 0.6rem;
   font-size: 0.72rem;
 }
+.companyVKSection { border-color: rgb(229 184 106 / 22%); }
+.legacyCredentialSection { border-color: rgb(255 155 143 / 18%); opacity: .86; }
+.vkEmpty { align-self: center; margin: 0; padding: 1rem; color: var(--muted); line-height: 1.5; }
+.vkEmpty strong { color: var(--text); }
+.vkEmpty p { margin: .25rem 0 0; }
+.vkEmpty a,.vkHint a,.vkCommunityLink { color: #e8c879; text-decoration: none; }
+.vkFormActions { display: flex; justify-content: flex-end; gap: .5rem; padding: .7rem; }
+.vkHint,.credentialRows > .error { margin: 0; padding: 0 .75rem .75rem; color: var(--muted); font-size: .78rem; }
+.credentialValue .vkCommunityLink { min-width: 0; overflow-wrap: anywhere; font-size: .82rem; }
 .missing {
   color: #77746e !important;
   font-weight: 500 !important;
@@ -497,6 +568,24 @@ button:disabled {
   background: rgb(173 63 51 / 45%);
   border-color: rgb(255 143 128 / 36%);
 }
+.archiveDialog { border-color: rgb(229 184 106 / 30%); }
+.archiveDialogMark {
+  display: grid;
+  flex: none;
+  width: 2.4rem;
+  height: 2.4rem;
+  place-items: center;
+  color: #e8c879;
+  background: rgb(229 184 106 / 10%);
+  border: 1px solid rgb(229 184 106 / 25%);
+  border-radius: 50%;
+  font-weight: 800;
+}
+.dialogActions .confirmArchive {
+  color: #211e1a;
+  background: linear-gradient(135deg, #e4b667, #c98454);
+  border-color: transparent;
+}
 .connectionActions button,
 .connectionActions a {
   border: 1px solid var(--border);
@@ -593,6 +682,12 @@ button:disabled {
   padding: 1rem;
   background: rgb(6 7 7 / 72%);
   backdrop-filter: blur(8px);
+}
+@media (max-width: 620px) {
+  .page > header { align-items: start; flex-direction: column; }
+  .headerActions { width: 100%; flex-wrap: wrap; }
+  .headerActions > * { flex: 1; text-align: center; }
+  .archiveNotice { align-items: start; }
 }
 .historyDialog {
   display: grid;

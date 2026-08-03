@@ -12,11 +12,12 @@ import (
 func (s *Server) listCompanies(w http.ResponseWriter, r *http.Request) {
 	p := r.Context().Value(principalKey).(principal)
 	rows, err := s.pool.Query(r.Context(), `
-		SELECT x.id,x.name,count(c.id)
+		SELECT x.id,x.name,count(c.id),v.id IS NOT NULL
 		FROM companies x
-		LEFT JOIN creators c ON c.company_id=x.id AND c.status<>'DISMISSED'
+		LEFT JOIN creators c ON c.company_id=x.id AND c.status<>'DISMISSED' AND c.archived_at IS NULL
+		LEFT JOIN company_vk_accounts v ON v.company_id=x.id
 		WHERE x.organization_id=$1 AND x.archived_at IS NULL
-		GROUP BY x.id
+		GROUP BY x.id,v.id
 		ORDER BY x.name`, p.OrganizationID)
 	if err != nil {
 		problem(w, http.StatusInternalServerError, "companies failed", "could not load companies")
@@ -27,11 +28,12 @@ func (s *Server) listCompanies(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var id, name string
 		var creatorCount int64
-		if err := rows.Scan(&id, &name, &creatorCount); err != nil {
+		var hasVKAccount bool
+		if err := rows.Scan(&id, &name, &creatorCount, &hasVKAccount); err != nil {
 			problem(w, http.StatusInternalServerError, "companies failed", "could not read companies")
 			return
 		}
-		items = append(items, map[string]any{"id": id, "name": name, "creatorCount": creatorCount})
+		items = append(items, map[string]any{"id": id, "name": name, "creatorCount": creatorCount, "hasVkAccount": hasVKAccount})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }

@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useMemo, useState } from 'react'
-import { Link, useParams, useSearchParams } from 'react-router-dom'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { api, type CreatorDetail, type CreatorHistoryBlock, type CreatorHistoryChange, type CreatorStatus, type CreatorWorkStatus, type Platform, type PlatformConnection } from '../../shared/api/client'
 import styles from './CreatorDetailPage.module.scss'
 import statusStyles from './CreatorStatus.module.scss'
@@ -13,14 +13,14 @@ const platformOptions: { id: Platform; name: string; hint: string }[] = [
 ]
 
 type CredentialField = { key: string; label: string; secret?: boolean }
-type CredentialSection = { id: string; name: string; fields: CredentialField[] }
+type CredentialSection = { id: string; name: string; fields: CredentialField[]; legacy?: boolean }
 
 const credentialSections: CredentialSection[] = [
   { id: 'GMAIL', name: 'Gmail', fields: [{ key: 'login', label: 'Логин' }, { key: 'password', label: 'Пароль', secret: true }, { key: 'phone', label: 'Телефон' }] },
   { id: 'YOUTUBE', name: 'YouTube', fields: [{ key: 'note', label: 'Способ доступа' }, { key: 'email', label: 'Почта аккаунта YouTube' }, { key: 'access_email', label: 'Почта креатора для доступа' }, { key: 'phone', label: 'Телефон' }] },
   { id: 'INSTAGRAM', name: 'Instagram', fields: [{ key: 'login', label: 'Логин' }, { key: 'password', label: 'Пароль', secret: true }, { key: 'phone', label: 'Телефон' }, { key: 'email', label: 'Почта' }] },
   { id: 'TIKTOK', name: 'TikTok', fields: [{ key: 'login', label: 'Логин' }, { key: 'password', label: 'Пароль', secret: true }, { key: 'phone', label: 'Телефон' }, { key: 'email', label: 'Почта' }] },
-  { id: 'VK', name: 'ВКонтакте', fields: [{ key: 'login', label: 'Логин' }, { key: 'password', label: 'Пароль', secret: true }, { key: 'phone', label: 'Телефон' }] },
+  { id: 'VK', name: 'VK · старые данные', legacy: true, fields: [{ key: 'login', label: 'Логин' }, { key: 'password', label: 'Пароль', secret: true }, { key: 'phone', label: 'Телефон' }] },
 ]
 
 function connectionPermissions(platform: Platform, scopes: string[]) {
@@ -96,9 +96,64 @@ const historyValueDateFormatter = new Intl.DateTimeFormat('ru-RU', { day: 'numer
 function historyFieldLabel(block: CreatorHistoryBlock, change: CreatorHistoryChange) {
   if (block === 'PROFILE') return profileHistoryLabels[change.fieldKey] ?? change.fieldKey
   if (block === 'WORK') return workHistoryLabels[change.fieldKey] ?? change.fieldKey
+  if (change.section === 'VK_SHARED') return change.fieldKey === 'account' ? 'ВКонтакте · Корпоративный аккаунт' : change.fieldKey === 'communityUrl' ? 'ВКонтакте · Сообщество креатора' : `ВКонтакте · ${change.fieldKey}`
+  if (change.section === 'VK_COMPANY') return `ВКонтакте · Общий ${{ login: 'логин', password: 'пароль', phone: 'телефон' }[change.fieldKey as 'login'|'password'|'phone'] ?? change.fieldKey}`
+  if (change.section === 'VK') return `ВКонтакте · ${{ login: 'Логин', password: 'Пароль', phone: 'Телефон' }[change.fieldKey as 'login'|'password'|'phone'] ?? change.fieldKey}`
   const section = credentialSections.find(item => item.id === change.section)
   const field = section?.fields.find(item => item.key === change.fieldKey)
   return `${section?.name ?? change.section} · ${field?.label ?? change.fieldKey}`
+}
+
+function CompanyVKAccess({ creatorID }: { creatorID: string }) {
+  const client = useQueryClient()
+  const accounts = useQuery({ queryKey: ['company-vk-accounts'], queryFn: api.companyVkAccounts })
+  const access = useQuery({ queryKey: ['creator-vk-access', creatorID], queryFn: () => api.creatorVkAccess(creatorID) })
+  const [editing, setEditing] = useState(false)
+  const [accountID, setAccountID] = useState('')
+  const [communityURL, setCommunityURL] = useState('')
+  const [password, setPassword] = useState('')
+  useEffect(() => {
+    setAccountID(access.data?.accountId ?? '')
+    setCommunityURL(access.data?.communityUrl ?? '')
+    setPassword('')
+  }, [access.data])
+  const save = useMutation({
+    mutationFn: () => api.saveCreatorVkAccess(creatorID, accountID, communityURL),
+    onSuccess: async () => {
+      await Promise.all([
+        client.invalidateQueries({ queryKey: ['creator-vk-access', creatorID] }),
+        client.invalidateQueries({ queryKey: ['creator-history', creatorID, 'CREDENTIALS'] }),
+      ])
+      setEditing(false)
+      setPassword('')
+    },
+  })
+  const reveal = useMutation({
+    mutationFn: () => api.revealCompanyVkPassword(access.data?.accountId ?? ''),
+    onSuccess: ({ value }) => setPassword(value),
+  })
+  const cancel = () => {
+    setAccountID(access.data?.accountId ?? '')
+    setCommunityURL(access.data?.communityUrl ?? '')
+    setEditing(false)
+  }
+  return <article className={`${styles.credentialSection} ${styles.companyVKSection}`}>
+    <div className={styles.credentialTitle}><h3>ВКонтакте</h3><span>Общий аккаунт фирмы</span>{!editing ? <button type="button" className={styles.vkEditButton} onClick={() => setEditing(true)}>Изменить</button> : null}</div>
+    {access.isPending || accounts.isPending ? <p className={styles.vkEmpty}>Загружаем корпоративный доступ…</p> : access.isError || accounts.isError ? <p className={styles.error}>Не удалось загрузить VK-доступ.</p> : editing ? <div className={styles.credentialRows}>
+      <label className={styles.credentialRow}><span>Аккаунт фирмы</span><select value={accountID} onChange={event => { setAccountID(event.target.value); if (!event.target.value) setCommunityURL('') }}><option value="">Не выбран</option>{accounts.data.items.map(account => <option value={account.id} key={account.id}>{account.companyName} · {account.login}</option>)}</select></label>
+      <label className={styles.credentialRow}><span>Сообщество</span><input type="url" required={Boolean(accountID)} disabled={!accountID} value={communityURL} onChange={event => setCommunityURL(event.target.value)} placeholder="https://vk.ru/club240646151" /></label>
+      <div className={styles.vkFormActions}><button type="button" className={styles.ghostButton} onClick={cancel}>Отмена</button><button type="button" className={styles.primaryButton} onClick={() => save.mutate()} disabled={save.isPending || (Boolean(accountID) && !communityURL.trim())}>{save.isPending ? 'Сохраняем…' : 'Сохранить'}</button></div>
+      {accounts.data.items.length === 0 ? <p className={styles.vkHint}>Сначала <Link to="/app/companies">настройте общий VK-аккаунт у компании</Link>.</p> : null}
+      {save.isError ? <p className={styles.error}>{save.error.message}</p> : null}
+    </div> : access.data.accountId ? <div className={styles.credentialRows}>
+      <div className={styles.credentialRow}><span>Аккаунт фирмы</span><div className={styles.credentialValue}><strong>{access.data.companyName}</strong></div></div>
+      <div className={styles.credentialRow}><span>Логин</span><div className={styles.credentialValue}><strong>{access.data.login}</strong></div></div>
+      <div className={styles.credentialRow}><span>Пароль</span><div className={styles.credentialValue}><strong>{password || '••••••••••••'}</strong>{password ? <button type="button" onClick={() => setPassword('')}>Скрыть</button> : <button type="button" onClick={() => reveal.mutate()} disabled={reveal.isPending}>{reveal.isPending ? 'Открываем…' : 'Показать'}</button>}</div></div>
+      <div className={styles.credentialRow}><span>Телефон</span><div className={styles.credentialValue}><strong className={access.data.phone ? '' : styles.missing}>{access.data.phone || '—'}</strong></div></div>
+      <div className={styles.credentialRow}><span>Сообщество</span><div className={styles.credentialValue}><a className={styles.vkCommunityLink} href={access.data.communityUrl} target="_blank" rel="noreferrer">{access.data.communityUrl} ↗</a></div></div>
+      {reveal.isError ? <p className={styles.error}>{reveal.error.message}</p> : null}
+    </div> : <div className={styles.vkEmpty}><strong>Корпоративный VK не выбран</strong><p>Выберите общий аккаунт фирмы и вставьте ссылку на сообщество этого креатора.</p>{accounts.data.items.length === 0 ? <Link to="/app/companies">Настроить VK у компании →</Link> : null}</div>}
+  </article>
 }
 
 function formatHistoryValue(block: CreatorHistoryBlock, change: CreatorHistoryChange, value: string | undefined) {
@@ -312,8 +367,8 @@ function CredentialVault({ creatorID }: { creatorID: string }) {
       <div className={styles.inlineActions}><CreatorHistory creatorID={creatorID} block="CREDENTIALS"/>{!editing ? <button className={styles.secondaryButton} onClick={() => setEditing(true)}>Редактировать доступы</button> : <><button className={styles.ghostButton} onClick={() => setEditing(false)}>Отмена</button><button className={styles.primaryButton} onClick={() => save.mutate()} disabled={save.isPending}>{save.isPending ? 'Сохраняем…' : 'Сохранить'}</button></>}</div>
     </div>
     {credentials.isPending ? <p className={styles.empty}>Загружаем доступы…</p> : credentials.isError ? <p className={styles.error}>{credentials.error.message}</p> : <div className={styles.credentialSections}>
-      {credentialSections.map(section => <article className={styles.credentialSection} key={section.id}>
-        <div className={styles.credentialTitle}><h3>{section.name}</h3><span>{section.fields.filter(field => itemMap.get(credentialKey(section.id, field.key))?.hasValue).length}/{section.fields.length}</span></div>
+      {credentialSections.filter(section => !section.legacy || section.fields.some(field => itemMap.get(credentialKey(section.id, field.key))?.hasValue)).map(section => <article className={`${styles.credentialSection} ${section.legacy ? styles.legacyCredentialSection : ''}`} key={section.id}>
+        <div className={styles.credentialTitle}><h3>{section.name}</h3><span>{section.legacy ? 'Перенесите в общий аккаунт фирмы' : `${section.fields.filter(field => itemMap.get(credentialKey(section.id, field.key))?.hasValue).length}/${section.fields.length}`}</span></div>
         <div className={styles.credentialRows}>{section.fields.map(field => {
           const key = credentialKey(section.id, field.key)
           const item = itemMap.get(key)
@@ -324,6 +379,7 @@ function CredentialVault({ creatorID }: { creatorID: string }) {
           </div>
         })}</div>
       </article>)}
+      <CompanyVKAccess creatorID={creatorID}/>
     </div>}
     {save.isError && <p className={styles.error}>{save.error.message}</p>}
   </section>
@@ -409,19 +465,39 @@ function PlatformConnections({ creatorID }: { creatorID: string }) {
 
 export function CreatorDetailPage() {
   const { id = '' } = useParams()
+  const navigate = useNavigate()
   const [contact, setContact] = useState('')
+  const [archiveConfirmation, setArchiveConfirmation] = useState(false)
   const client = useQueryClient()
   const creator = useQuery({ queryKey: ['creator', id], queryFn: () => api.creator(id), enabled: Boolean(id) })
   const addContact = useMutation({ mutationFn: () => api.createContact(id, { kind: 'EMAIL', value: contact, isPrimary: !creator.data?.contacts.length }), onSuccess: () => { setContact(''); client.invalidateQueries({ queryKey: ['creator', id] }) } })
+  const refreshCreatorLists = () => Promise.all([
+    client.invalidateQueries({ queryKey: ['creator', id] }),
+    client.invalidateQueries({ queryKey: ['creators'] }),
+    client.invalidateQueries({ queryKey: ['companies'] }),
+    client.invalidateQueries({ queryKey: ['summary'] }),
+  ])
+  const archive = useMutation({
+    mutationFn: () => api.archiveCreator(id),
+    onSuccess: async () => {
+      setArchiveConfirmation(false)
+      await refreshCreatorLists()
+      navigate('/app/creators')
+    },
+  })
+  const restore = useMutation({ mutationFn: () => api.restoreCreator(id), onSuccess: refreshCreatorLists })
   if (creator.isPending) return <p>Загружаем карточку креатора…</p>
   if (creator.isError) return <p className={styles.error}>{creator.error.message}</p>
   return <section className={styles.page}>
     <Link to="/app/creators" className={styles.back}>← Креаторы</Link>
-    <header><div><p>КАРТОЧКА КРЕАТОРА</p><h1>{creator.data.displayName}</h1></div><div className={styles.headerActions}>{creator.data.telegramUsername && <a className={styles.telegram} href={`https://t.me/${creator.data.telegramUsername}`} target="_blank" rel="noreferrer">Открыть Telegram</a>}</div></header>
+    <header><div><p>КАРТОЧКА КРЕАТОРА</p><h1>{creator.data.displayName}</h1></div><div className={styles.headerActions}>{creator.data.telegramUsername && <a className={styles.telegram} href={`https://t.me/${creator.data.telegramUsername}`} target="_blank" rel="noreferrer">Открыть Telegram</a>}{creator.data.archivedAt ? <button type="button" className={styles.restoreButton} onClick={() => restore.mutate()} disabled={restore.isPending}>{restore.isPending ? 'Восстанавливаем…' : 'Восстановить'}</button> : <button type="button" className={styles.archiveButton} onClick={() => setArchiveConfirmation(true)}>В архив</button>}</div></header>
+    {creator.data.archivedAt ? <div className={styles.archiveNotice}><span>АРХИВ</span><div><b>Карточка не показывается в рабочих списках и на дашборде</b><small>Перенесена {historyDateFormatter.format(new Date(creator.data.archivedAt))}. Все данные, доступы и история сохранены.</small></div></div> : null}
+    {restore.isError ? <p className={styles.error}>Не удалось восстановить карточку: {restore.error.message}</p> : null}
     <CreatorProfile creator={creator.data} creatorID={id}/>
     <CreatorWork creator={creator.data} creatorID={id}/>
     <CredentialVault creatorID={id}/>
     <PlatformConnections creatorID={id}/>
     <section className={styles.contacts}><div className={styles.sectionHead}><div><h2>Контакты</h2><p>Дополнительные способы связи.</p></div></div>{creator.data.contacts.map(c => <p key={c.id}>{c.kind}: {c.value}</p>)}<form onSubmit={event => { event.preventDefault(); if (contact) addContact.mutate() }}><input value={contact} onChange={event => setContact(event.target.value)} placeholder="Email"/><button>Добавить</button></form></section>
+    {archiveConfirmation ? <div className={styles.dialogBackdrop} role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !archive.isPending) setArchiveConfirmation(false) }}><div className={`${styles.confirmDialog} ${styles.archiveDialog}`} role="dialog" aria-modal="true" aria-labelledby="archive-creator-title"><div><span className={styles.archiveDialogMark}>↘</span><div><h3 id="archive-creator-title">Перенести креатора в архив?</h3><p>{creator.data.displayName}</p></div></div><p>Карточка исчезнет из рабочих списков и дашборда. Профиль, доступы, статистика и история изменений сохранятся — креатора можно восстановить в любой момент.</p>{archive.isError ? <p className={styles.error}>Не удалось перенести карточку: {archive.error.message}</p> : null}<div className={styles.dialogActions}><button type="button" onClick={() => setArchiveConfirmation(false)} disabled={archive.isPending}>Отмена</button><button type="button" className={styles.confirmArchive} onClick={() => archive.mutate()} disabled={archive.isPending}>{archive.isPending ? 'Переносим…' : 'Перенести в архив'}</button></div></div></div> : null}
   </section>
 }

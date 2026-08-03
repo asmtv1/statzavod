@@ -39,7 +39,10 @@ paths:
   /platform-accounts/{id}/data:
     delete: { summary: Revoke and remove a platform connection with its imported data, responses: { '204': { description: Connection and data removed } } }
   /creators:
-    get: { summary: List active creators, responses: { '200': { description: Creator list } } }
+    get:
+      summary: List active or archived creators
+      parameters: [{ name: scope, in: query, schema: { type: string, enum: [active, archived], default: active } }]
+      responses: { '200': { description: Creator list }, '400': { $ref: '#/components/responses/Problem' } }
     post:
       summary: Create creator
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreatorInput' } } } }
@@ -50,6 +53,19 @@ paths:
       summary: Create company
       requestBody: { required: true, content: { application/json: { schema: { type: object, required: [name], properties: { name: { type: string } } } } } }
       responses: { '201': { description: Created }, '409': { $ref: '#/components/responses/Problem' } }
+  /company-vk-accounts:
+    get: { summary: List shared company VK accounts, responses: { '200': { description: Shared VK accounts without passwords } } }
+  /companies/{id}/vk-account:
+    put:
+      summary: Create or update the single shared VK account for a company
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [login], properties: { login: { type: string }, password: { type: string, format: password }, phone: { type: string } } } } } }
+      responses: { '200': { description: Saved }, '400': { $ref: '#/components/responses/Problem' }, '404': { $ref: '#/components/responses/Problem' } }
+  /company-vk-accounts/{id}/password/reveal:
+    post:
+      summary: Reveal a shared company VK password (admin only)
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses: { '200': { description: Decrypted password }, '403': { $ref: '#/components/responses/Problem' }, '404': { $ref: '#/components/responses/Problem' } }
   /companies/{id}:
     delete:
       summary: Archive company and detach its creators
@@ -61,6 +77,26 @@ paths:
       parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
       requestBody: { required: true, content: { application/json: { schema: { type: object, required: [status], properties: { status: { type: string, enum: [OK, NEEDS_ATTENTION, IN_PROGRESS] }, comment: { type: string } } } } } }
       responses: { '204': { description: Updated }, '400': { $ref: '#/components/responses/Problem' }, '404': { $ref: '#/components/responses/Problem' } }
+  /creators/{id}/vk-access:
+    get:
+      summary: Get the shared company VK account and community assigned to a creator
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses: { '200': { description: Creator VK access }, '404': { $ref: '#/components/responses/Problem' } }
+    put:
+      summary: Assign a shared company VK account and community to a creator
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, properties: { accountId: { type: string, format: uuid, nullable: true }, communityUrl: { type: string, format: uri, example: 'https://vk.ru/club240646151' } } } } } }
+      responses: { '204': { description: Saved }, '400': { $ref: '#/components/responses/Problem' }, '404': { $ref: '#/components/responses/Problem' } }
+  /creators/{id}/archive:
+    post:
+      summary: Move creator out of active lists while preserving all data
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses: { '204': { description: Archived }, '404': { $ref: '#/components/responses/Problem' } }
+  /creators/{id}/restore:
+    post:
+      summary: Restore an archived creator to active lists
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses: { '204': { description: Restored }, '404': { $ref: '#/components/responses/Problem' } }
   /creators/{id}/history:
     get:
       summary: List creator field changes for one card block

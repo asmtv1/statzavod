@@ -106,10 +106,13 @@ time {
   padding: 0.28rem 0.45rem;
   border-radius: 0.4rem;
 }
-.filters { display: flex; align-items: end; justify-content: space-between; gap: 1rem; }
+.filters { display: flex; align-items: end; gap: 1rem; }
 .filters label { display: grid; gap: .35rem; color: var(--muted); font-size: .75rem; }
 .filters select,.fields select { color: var(--text); background: #191b1b; border: 1px solid var(--border); padding: .62rem; border-radius: .45rem; font: inherit; }
-.filters span { color: var(--muted); font-size: .8rem; }
+.filters > span { margin-left: auto; color: var(--muted); font-size: .8rem; }
+.scopeTabs { display: flex; padding: .22rem; background: #191b1b; border: 1px solid var(--border); border-radius: .55rem; }
+.scopeTabs button { color: var(--muted); background: transparent; border: 0; border-radius: .4rem; padding: .48rem .75rem; font: inherit; font-size: .8rem; font-weight: 700; cursor: pointer; }
+.scopeTabs .scopeActive { color: #211e1a; background: linear-gradient(135deg, #e4b667, #c98454); }
 .company { color: #e3b268; font-size: .82rem; }
 .telegram { color: #74b9e8; font-size: .82rem; }
 .unassigned { color: var(--muted); font-size: .82rem; }
@@ -204,4 +207,9 @@ time {
   .fields {
     grid-template-columns: 1fr;
   }
+  .filters { align-items: stretch; flex-wrap: wrap; }
+  .scopeTabs { width: 100%; }
+  .scopeTabs button { flex: 1; }
+  .filters label { flex: 1; }
+  .filters select { width: 100%; }
 }

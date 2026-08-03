@@ -97,7 +97,7 @@ func (s *Server) oauthAuthorize(w http.ResponseWriter, r *http.Request) {
 	p := r.Context().Value(principalKey).(principal)
 	creatorID := chi.URLParam(r, "id")
 	var exists bool
-	if err := s.pool.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM creators WHERE id=$1 AND organization_id=$2 AND status='ACTIVE')`, creatorID, p.OrganizationID).Scan(&exists); err != nil || !exists {
+	if err := s.pool.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM creators WHERE id=$1 AND organization_id=$2 AND status='ACTIVE' AND archived_at IS NULL)`, creatorID, p.OrganizationID).Scan(&exists); err != nil || !exists {
 		problem(w, http.StatusNotFound, "creator not found", "creator does not exist in this organization")
 		return
 	}

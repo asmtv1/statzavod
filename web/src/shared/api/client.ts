@@ -1,9 +1,11 @@
 export type Kpi = { key: string; label: string; value: number }
 export type Summary = { kpis: Kpi[]; freshness: { status: string; message: string } }
-export type CreatorStatus = 'ACTIVE'|'ON_LEAVE'|'DISMISSED'
+export type CreatorStatus = 'ACTIVE'|'ON_LEAVE'|'DISMISSED'|'ARCHIVED'
 export type CreatorWorkStatus = 'OK'|'NEEDS_ATTENTION'|'IN_PROGRESS'
-export type Company = { id:string; name:string; creatorCount:number }
-export type Creator = { id:string; firstName:string; lastName:string; middleName:string; displayName:string; status:CreatorStatus; createdAt:string; telegramUsername:string; companyId:string; companyName:string; workStatus:CreatorWorkStatus; workComment:string }
+export type Company = { id:string; name:string; creatorCount:number; hasVkAccount:boolean }
+export type CompanyVkAccount = { id:string; companyId:string; companyName:string; login:string; phone:string; hasPassword:boolean; updatedAt:string }
+export type CreatorVkAccess = { accountId:string; companyId:string; companyName:string; login:string; phone:string; hasPassword:boolean; communityUrl:string }
+export type Creator = { id:string; firstName:string; lastName:string; middleName:string; displayName:string; status:CreatorStatus; createdAt:string; archivedAt:string|null; telegramUsername:string; companyId:string; companyName:string; workStatus:CreatorWorkStatus; workComment:string }
 export type Timeseries = { items: { date:string; views:number }[] }
 export type Publication = { id:string; title:string | null; platform:string; publishedAt:string; creatorName:string; companyId:string; companyName:string; views:number }
 export type CreatorAnalytics = { creatorId:string; creatorName:string; period:{from:string;to:string}; kpis:Kpi[]; publications:{id:string;title:string;platform:string;publishedAt:string;views:number;likes:number}[] }
@@ -47,16 +49,24 @@ export const api = {
   companies:()=>request<{items:Company[]}>('/companies'),
   createCompany:(name:string)=>request<{id:string;name:string}>('/companies',{method:'POST',body:JSON.stringify({name})}),
   archiveCompany:(id:string)=>request<void>(`/companies/${id}`,{method:'DELETE'}),
+  companyVkAccounts:()=>request<{items:CompanyVkAccount[]}>('/company-vk-accounts'),
+  saveCompanyVkAccount:(companyId:string,payload:{login:string;password:string;phone:string})=>request<{id:string}>(`/companies/${companyId}/vk-account`,{method:'PUT',body:JSON.stringify(payload)}),
+  revealCompanyVkPassword:(accountId:string)=>request<{value:string}>(`/company-vk-accounts/${accountId}/password/reveal`,{method:'POST'}),
   creators:()=>request<{items:Creator[]}>('/creators'),
+  archivedCreators:()=>request<{items:Creator[]}>('/creators?scope=archived'),
   contentGroups:()=>request<{items:ContentGroup[]}>('/content-groups'),
   creator:(id:string)=>request<CreatorDetail>(`/creators/${id}`),
   updateCreator:(id:string,payload:Record<string,string>)=>request<void>(`/creators/${id}`,{method:'PATCH',body:JSON.stringify(payload)}),
+  archiveCreator:(id:string)=>request<void>(`/creators/${id}/archive`,{method:'POST'}),
+  restoreCreator:(id:string)=>request<void>(`/creators/${id}/restore`,{method:'POST'}),
   updateCreatorWorkStatus:(id:string,status:CreatorWorkStatus,comment:string)=>request<void>(`/creators/${id}/work-status`,{method:'PATCH',body:JSON.stringify({status,comment})}),
   creatorHistory:(id:string,block:CreatorHistoryBlock)=>request<{items:CreatorHistoryEvent[]}>(`/creators/${id}/history?block=${encodeURIComponent(block)}`),
   revealCreatorHistoryCredential:(id:string,changeID:string,side:'old'|'new')=>request<{value:string}>(`/creators/${id}/history/changes/${changeID}/reveal`,{method:'POST',body:JSON.stringify({side})}),
   creatorCredentials:(id:string)=>request<{items:CreatorCredential[]}>(`/creators/${id}/credentials`),
   saveCreatorCredentials:(id:string,items:{section:string;fieldKey:string;value:string}[])=>request<void>(`/creators/${id}/credentials`,{method:'PUT',body:JSON.stringify({items})}),
   revealCreatorCredential:(id:string,credentialID:string)=>request<{value:string}>(`/creators/${id}/credentials/${credentialID}/reveal`,{method:'POST'}),
+  creatorVkAccess:(id:string)=>request<CreatorVkAccess>(`/creators/${id}/vk-access`),
+  saveCreatorVkAccess:(id:string,accountId:string,communityUrl:string)=>request<void>(`/creators/${id}/vk-access`,{method:'PUT',body:JSON.stringify({accountId,communityUrl})}),
   creatorAccounts:(id:string)=>request<{items:PlatformAccount[]}>(`/creators/${id}/accounts`),
   createCreatorAccount:(id:string,payload:Record<string,string>)=>request(`/creators/${id}/accounts`,{method:'POST',body:JSON.stringify(payload)}),
   creatorAnalytics:(id:string,from:string,to:string)=>request<CreatorAnalytics>(`/analytics/creators/${id}?activityFrom=${encodeURIComponent(from)}&activityTo=${encodeURIComponent(to)}`),

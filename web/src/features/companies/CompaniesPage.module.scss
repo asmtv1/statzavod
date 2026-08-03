@@ -11,8 +11,12 @@
 .grid h2 { font-size: 1rem; }
 .grid p { color: var(--muted); font-size: .82rem; margin-top: .25rem; }
 .mark { display: grid; place-items: center; width: 2.7rem; height: 2.7rem; border-radius: .7rem; color: #211e1a; background: linear-gradient(145deg,#e3b268,#cc8766); font-weight: 800; }
-.archive,.dialog button { border: 0; background: transparent; color: var(--muted); cursor: pointer; font: inherit; }
+.archive,.dialog button,.actions button { border: 0; background: transparent; color: var(--muted); cursor: pointer; font: inherit; }
 .archive { font-size: .78rem; }
+.actions { display: flex; align-items: center; gap: .55rem; }
+.actions .vkSetup,.actions .vkReady { padding: .42rem .58rem; border-radius: .42rem; font-size: .76rem; font-weight: 700; }
+.actions .vkSetup { color: #e8c879; background: rgb(229 184 106/.09); border: 1px solid rgb(229 184 106/.22); }
+.actions .vkReady { color: #bcefd0; background: rgb(156 229 189/.11); border: 1px solid rgb(156 229 189/.2); }
 .state,.error { padding: 1.25rem; background: #202222; border: 1px solid var(--border); border-radius: 1rem; }
 .error { color: #ff9b8f; }
 .backdrop { position: fixed; inset: 0; z-index: 10; display: grid; place-items: center; padding: 1rem; background: rgb(6 7 7/.7); backdrop-filter: blur(8px); }
@@ -21,4 +25,15 @@
 .dialog p { color: var(--muted); line-height: 1.5; }
 .dialog footer { display: flex; justify-content: flex-end; gap: .7rem; }
 .dialog .confirm { color: #ff9b8f; }
-@media (max-width:620px) { .create { align-items: stretch; flex-direction: column; } .grid article { grid-template-columns: 2.7rem 1fr; } .archive { grid-column: 2; justify-self: start; } }
+.dialogHead { display: flex; align-items: start; justify-content: space-between; gap: 1rem; }
+.dialogHead span { color: var(--gold); font-size: .65rem; font-weight: 750; letter-spacing: .14em; }
+.dialogHead h2 { margin: .18rem 0 0; }
+.dialogHead > button { font-size: 1.65rem; line-height: 1; }
+.vkDialog { width: min(100%,36rem); }
+.vkFields { display: grid; gap: .8rem; margin: 1.1rem 0; }
+.vkFields label { display: grid; gap: .38rem; font-size: .8rem; font-weight: 650; }
+.vkFields input { width: 100%; color: var(--text); background: #191b1b; border: 1px solid var(--border); padding: .68rem; border-radius: .45rem; font: inherit; }
+.passwordField { display: flex; align-items: center; gap: .5rem; }
+.passwordField button { flex: none; color: #e8c879; padding: .62rem .7rem; border: 1px solid rgb(229 184 106/.22); border-radius: .45rem; }
+.dialog footer .saveVK { color: #211e1a; padding: .6rem .8rem; background: linear-gradient(135deg,#e4b667,#c98454); border-radius: .48rem; font-weight: 750; }
+@media (max-width:620px) { .create { align-items: stretch; flex-direction: column; } .grid article { grid-template-columns: 2.7rem 1fr; } .actions { grid-column: 2; align-items: start; flex-direction: column; } .passwordField { align-items: stretch; flex-direction: column; } }

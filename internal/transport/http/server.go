@@ -57,6 +57,9 @@ func (s *Server) Router() http.Handler {
 			r.Use(s.auth)
 			r.Get("/companies", s.listCompanies)
 			r.With(s.require("ADMIN", "ANALYST")).Post("/companies", s.createCompany)
+			r.Get("/company-vk-accounts", s.listCompanyVKAccounts)
+			r.With(s.require("ADMIN", "ANALYST")).Put("/companies/{id}/vk-account", s.saveCompanyVKAccount)
+			r.With(s.require("ADMIN")).Post("/company-vk-accounts/{id}/password/reveal", s.revealCompanyVKPassword)
 			r.With(s.require("ADMIN", "ANALYST")).Delete("/companies/{id}", s.archiveCompany)
 			r.Get("/analytics/summary", s.summary)
 			r.Get("/analytics/timeseries", s.timeseries)
@@ -71,6 +74,8 @@ func (s *Server) Router() http.Handler {
 			r.Get("/creators/{id}/credentials", s.listCreatorCredentials)
 			r.With(s.require("ADMIN", "ANALYST")).Put("/creators/{id}/credentials", s.saveCreatorCredentials)
 			r.With(s.require("ADMIN")).Post("/creators/{id}/credentials/{credentialID}/reveal", s.revealCreatorCredential)
+			r.Get("/creators/{id}/vk-access", s.getCreatorVKAccess)
+			r.With(s.require("ADMIN", "ANALYST")).Put("/creators/{id}/vk-access", s.saveCreatorVKAccess)
 			r.With(s.require("ADMIN")).Post("/creators/{id}/history/changes/{changeID}/reveal", s.revealCreatorHistoryCredential)
 			r.Get("/creators/{id}/accounts", s.listCreatorAccounts)
 			r.With(s.require("ADMIN", "ANALYST")).Post("/creators/{id}/accounts", s.createCreatorAccount)
@@ -84,6 +89,7 @@ func (s *Server) Router() http.Handler {
 			r.With(s.require("ADMIN", "ANALYST")).Post("/platform-accounts/{id}/resume", s.resumePlatformAccount)
 			r.With(s.require("ADMIN", "ANALYST")).Post("/creators/{id}/contacts", s.createContact)
 			r.With(s.require("ADMIN", "ANALYST")).Post("/creators/{id}/archive", s.archiveCreator)
+			r.With(s.require("ADMIN", "ANALYST")).Post("/creators/{id}/restore", s.restoreCreator)
 			r.Get("/publications", s.listPublications)
 			r.Get("/content-groups", s.listContentGroups)
 			r.With(s.require("ADMIN", "ANALYST")).Post("/content-groups", s.createContentGroup)
@@ -188,7 +194,15 @@ func (s *Server) require(roles ...string) func(http.Handler) http.Handler {
 }
 func (s *Server) listCreators(w http.ResponseWriter, r *http.Request) {
 	p := r.Context().Value(principalKey).(principal)
-	rows, err := s.pool.Query(r.Context(), `SELECT c.id,c.first_name,c.last_name,COALESCE(c.middle_name,''),c.display_name,c.status,c.created_at,c.telegram_username,COALESCE(c.company_id::text,''),COALESCE(x.name,''),c.work_status,c.work_comment FROM creators c LEFT JOIN companies x ON x.id=c.company_id WHERE c.organization_id=$1 ORDER BY CASE c.status WHEN 'ACTIVE' THEN 0 WHEN 'ON_LEAVE' THEN 1 ELSE 2 END,c.display_name`, p.OrganizationID)
+	scope := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("scope")))
+	archiveFilter := "c.archived_at IS NULL"
+	if scope == "archived" {
+		archiveFilter = "c.archived_at IS NOT NULL"
+	} else if scope != "" && scope != "active" {
+		problem(w, http.StatusBadRequest, "invalid scope", "scope must be active or archived")
+		return
+	}
+	rows, err := s.pool.Query(r.Context(), `SELECT c.id,c.first_name,c.last_name,COALESCE(c.middle_name,''),c.display_name,c.status,c.created_at,c.telegram_username,COALESCE(c.company_id::text,''),COALESCE(x.name,''),c.work_status,c.work_comment,c.archived_at FROM creators c LEFT JOIN companies x ON x.id=c.company_id WHERE c.organization_id=$1 AND `+archiveFilter+` ORDER BY CASE c.status WHEN 'ACTIVE' THEN 0 WHEN 'ON_LEAVE' THEN 1 ELSE 2 END,c.display_name`, p.OrganizationID)
 	if err != nil {
 		problem(w, 500, "query failed", err.Error())
 		return
@@ -198,11 +212,12 @@ func (s *Server) listCreators(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var id, first, last, middle, display, status, telegram, companyID, companyName, workStatus, workComment string
 		var created time.Time
-		if err := rows.Scan(&id, &first, &last, &middle, &display, &status, &created, &telegram, &companyID, &companyName, &workStatus, &workComment); err != nil {
+		var archivedAt *time.Time
+		if err := rows.Scan(&id, &first, &last, &middle, &display, &status, &created, &telegram, &companyID, &companyName, &workStatus, &workComment, &archivedAt); err != nil {
 			problem(w, 500, "scan failed", err.Error())
 			return
 		}
-		items = append(items, map[string]any{"id": id, "firstName": first, "lastName": last, "middleName": middle, "displayName": display, "status": status, "createdAt": created, "telegramUsername": telegram, "companyId": companyID, "companyName": companyName, "workStatus": workStatus, "workComment": workComment})
+		items = append(items, map[string]any{"id": id, "firstName": first, "lastName": last, "middleName": middle, "displayName": display, "status": status, "createdAt": created, "archivedAt": archivedAt, "telegramUsername": telegram, "companyId": companyID, "companyName": companyName, "workStatus": workStatus, "workComment": workComment})
 	}
 	writeJSON(w, 200, map[string]any{"items": items})
 }
@@ -246,7 +261,8 @@ func (s *Server) getCreator(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	p := r.Context().Value(principalKey).(principal)
 	var first, last, middle, display, status, note, telegram, companyID, companyName, workStatus, workComment string
-	err := s.pool.QueryRow(r.Context(), `SELECT c.first_name,c.last_name,COALESCE(c.middle_name,''),c.display_name,c.status,c.internal_note,c.telegram_username,COALESCE(c.company_id::text,''),COALESCE(x.name,''),c.work_status,c.work_comment FROM creators c LEFT JOIN companies x ON x.id=c.company_id WHERE c.id=$1 AND c.organization_id=$2`, id, p.OrganizationID).Scan(&first, &last, &middle, &display, &status, &note, &telegram, &companyID, &companyName, &workStatus, &workComment)
+	var archivedAt *time.Time
+	err := s.pool.QueryRow(r.Context(), `SELECT c.first_name,c.last_name,COALESCE(c.middle_name,''),c.display_name,c.status,c.internal_note,c.telegram_username,COALESCE(c.company_id::text,''),COALESCE(x.name,''),c.work_status,c.work_comment,c.archived_at FROM creators c LEFT JOIN companies x ON x.id=c.company_id WHERE c.id=$1 AND c.organization_id=$2`, id, p.OrganizationID).Scan(&first, &last, &middle, &display, &status, &note, &telegram, &companyID, &companyName, &workStatus, &workComment, &archivedAt)
 	if err == pgx.ErrNoRows {
 		problem(w, 404, "not found", "creator does not exist")
 		return
@@ -271,7 +287,7 @@ func (s *Server) getCreator(w http.ResponseWriter, r *http.Request) {
 		}
 		contacts = append(contacts, map[string]any{"id": cid, "kind": kind, "value": value, "label": label, "isPrimary": primary})
 	}
-	writeJSON(w, 200, map[string]any{"id": id, "firstName": first, "lastName": last, "middleName": middle, "displayName": display, "status": status, "internalNote": note, "telegramUsername": telegram, "companyId": companyID, "companyName": companyName, "workStatus": workStatus, "workComment": workComment, "contacts": contacts})
+	writeJSON(w, 200, map[string]any{"id": id, "firstName": first, "lastName": last, "middleName": middle, "displayName": display, "status": status, "internalNote": note, "archivedAt": archivedAt, "telegramUsername": telegram, "companyId": companyID, "companyName": companyName, "workStatus": workStatus, "workComment": workComment, "contacts": contacts})
 }
 func (s *Server) createContact(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
@@ -361,13 +377,55 @@ func (s *Server) createCreatorAccount(w http.ResponseWriter, r *http.Request) {
 func (s *Server) archiveCreator(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	p := r.Context().Value(principalKey).(principal)
-	tag, err := s.pool.Exec(r.Context(), `UPDATE creators SET status='ARCHIVED',archived_at=now(),updated_at=now() WHERE id=$1 AND organization_id=$2 AND status='ACTIVE'`, id, p.OrganizationID)
+	tx, err := s.pool.Begin(r.Context())
 	if err != nil {
-		problem(w, 500, "archive failed", err.Error())
+		problem(w, http.StatusInternalServerError, "archive failed", "could not start archive")
+		return
+	}
+	defer tx.Rollback(r.Context())
+	tag, err := tx.Exec(r.Context(), `UPDATE creators SET archived_at=now(),updated_at=now() WHERE id=$1 AND organization_id=$2 AND archived_at IS NULL`, id, p.OrganizationID)
+	if err != nil {
+		problem(w, http.StatusInternalServerError, "archive failed", "could not archive creator")
 		return
 	}
 	if tag.RowsAffected() == 0 {
-		problem(w, 404, "not found", "active creator does not exist")
+		problem(w, http.StatusNotFound, "not found", "active creator does not exist")
+		return
+	}
+	if _, err = tx.Exec(r.Context(), `INSERT INTO audit_logs(organization_id,actor_id,action,entity_type,entity_id) VALUES($1,$2,'ARCHIVE','CREATOR',$3)`, p.OrganizationID, p.ID, id); err != nil {
+		problem(w, http.StatusInternalServerError, "archive failed", "could not save audit record")
+		return
+	}
+	if err = tx.Commit(r.Context()); err != nil {
+		problem(w, http.StatusInternalServerError, "archive failed", "could not commit archive")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+func (s *Server) restoreCreator(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	p := r.Context().Value(principalKey).(principal)
+	tx, err := s.pool.Begin(r.Context())
+	if err != nil {
+		problem(w, http.StatusInternalServerError, "restore failed", "could not start restore")
+		return
+	}
+	defer tx.Rollback(r.Context())
+	tag, err := tx.Exec(r.Context(), `UPDATE creators SET status=CASE WHEN status='ARCHIVED' THEN 'ACTIVE'::creator_status ELSE status END,archived_at=NULL,updated_at=now() WHERE id=$1 AND organization_id=$2 AND archived_at IS NOT NULL`, id, p.OrganizationID)
+	if err != nil {
+		problem(w, http.StatusInternalServerError, "restore failed", "could not restore creator")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		problem(w, http.StatusNotFound, "not found", "archived creator does not exist")
+		return
+	}
+	if _, err = tx.Exec(r.Context(), `INSERT INTO audit_logs(organization_id,actor_id,action,entity_type,entity_id) VALUES($1,$2,'RESTORE','CREATOR',$3)`, p.OrganizationID, p.ID, id); err != nil {
+		problem(w, http.StatusInternalServerError, "restore failed", "could not save audit record")
+		return
+	}
+	if err = tx.Commit(r.Context()); err != nil {
+		problem(w, http.StatusInternalServerError, "restore failed", "could not commit restore")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -435,7 +493,7 @@ func (s *Server) summary(w http.ResponseWriter, r *http.Request) {
 	p := r.Context().Value(principalKey).(principal)
 	var creators, publications int64
 	var views, likes int64
-	err := s.pool.QueryRow(r.Context(), `SELECT (SELECT count(*) FROM creators WHERE status='ACTIVE' AND organization_id=$1),(SELECT count(*) FROM publications WHERE organization_id=$1),(SELECT COALESCE(sum(x.views),0) FROM (SELECT DISTINCT ON (s.publication_id) s.views FROM publication_metric_snapshots s JOIN publications p ON p.id=s.publication_id WHERE p.organization_id=$1 ORDER BY s.publication_id,s.observed_at DESC) x),(SELECT COALESCE(sum(x.likes),0) FROM (SELECT DISTINCT ON (s.publication_id) s.likes FROM publication_metric_snapshots s JOIN publications p ON p.id=s.publication_id WHERE p.organization_id=$1 ORDER BY s.publication_id,s.observed_at DESC) x)`, p.OrganizationID).Scan(&creators, &publications, &views, &likes)
+	err := s.pool.QueryRow(r.Context(), `SELECT (SELECT count(*) FROM creators WHERE status='ACTIVE' AND archived_at IS NULL AND organization_id=$1),(SELECT count(*) FROM publications WHERE organization_id=$1),(SELECT COALESCE(sum(x.views),0) FROM (SELECT DISTINCT ON (s.publication_id) s.views FROM publication_metric_snapshots s JOIN publications p ON p.id=s.publication_id WHERE p.organization_id=$1 ORDER BY s.publication_id,s.observed_at DESC) x),(SELECT COALESCE(sum(x.likes),0) FROM (SELECT DISTINCT ON (s.publication_id) s.likes FROM publication_metric_snapshots s JOIN publications p ON p.id=s.publication_id WHERE p.organization_id=$1 ORDER BY s.publication_id,s.observed_at DESC) x)`, p.OrganizationID).Scan(&creators, &publications, &views, &likes)
 	if err != nil {
 		problem(w, 500, "summary failed", err.Error())
 		return
