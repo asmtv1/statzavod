@@ -96,7 +96,7 @@ const historyValueDateFormatter = new Intl.DateTimeFormat('ru-RU', { day: 'numer
 function historyFieldLabel(block: CreatorHistoryBlock, change: CreatorHistoryChange) {
   if (block === 'PROFILE') return profileHistoryLabels[change.fieldKey] ?? change.fieldKey
   if (block === 'WORK') return workHistoryLabels[change.fieldKey] ?? change.fieldKey
-  if (change.section === 'VK_SHARED') return change.fieldKey === 'account' ? 'ВКонтакте · Корпоративный аккаунт' : change.fieldKey === 'communityUrl' ? 'ВКонтакте · Сообщество креатора' : `ВКонтакте · ${change.fieldKey}`
+  if (change.section === 'VK_SHARED') return change.fieldKey === 'account' ? 'ВКонтакте · Корпоративный аккаунт' : change.fieldKey === 'communityUrl' ? 'ВКонтакте · Сообщество креатора' : change.fieldKey === 'recipientAccountUrl' ? 'ВКонтакте · Аккаунт с доступом' : `ВКонтакте · ${change.fieldKey}`
   if (change.section === 'VK_COMPANY') return `ВКонтакте · Общий ${{ login: 'логин', password: 'пароль', phone: 'телефон' }[change.fieldKey as 'login'|'password'|'phone'] ?? change.fieldKey}`
   if (change.section === 'VK') return `ВКонтакте · ${{ login: 'Логин', password: 'Пароль', phone: 'Телефон' }[change.fieldKey as 'login'|'password'|'phone'] ?? change.fieldKey}`
   const section = credentialSections.find(item => item.id === change.section)
@@ -111,14 +111,16 @@ function CompanyVKAccess({ creatorID }: { creatorID: string }) {
   const [editing, setEditing] = useState(false)
   const [accountID, setAccountID] = useState('')
   const [communityURL, setCommunityURL] = useState('')
+  const [recipientAccountURL, setRecipientAccountURL] = useState('')
   const [password, setPassword] = useState('')
   useEffect(() => {
     setAccountID(access.data?.accountId ?? '')
     setCommunityURL(access.data?.communityUrl ?? '')
+    setRecipientAccountURL(access.data?.recipientAccountUrl ?? '')
     setPassword('')
   }, [access.data])
   const save = useMutation({
-    mutationFn: () => api.saveCreatorVkAccess(creatorID, accountID, communityURL),
+    mutationFn: () => api.saveCreatorVkAccess(creatorID, accountID, communityURL, recipientAccountURL),
     onSuccess: async () => {
       await Promise.all([
         client.invalidateQueries({ queryKey: ['creator-vk-access', creatorID] }),
@@ -135,22 +137,24 @@ function CompanyVKAccess({ creatorID }: { creatorID: string }) {
   const cancel = () => {
     setAccountID(access.data?.accountId ?? '')
     setCommunityURL(access.data?.communityUrl ?? '')
+    setRecipientAccountURL(access.data?.recipientAccountUrl ?? '')
     setEditing(false)
   }
   return <article className={`${styles.credentialSection} ${styles.companyVKSection}`}>
     <div className={styles.credentialTitle}><h3>ВКонтакте</h3><span>Общий аккаунт фирмы</span>{!editing ? <button type="button" className={styles.vkEditButton} onClick={() => setEditing(true)}>Изменить</button> : null}</div>
     {access.isPending || accounts.isPending ? <p className={styles.vkEmpty}>Загружаем корпоративный доступ…</p> : access.isError || accounts.isError ? <p className={styles.error}>Не удалось загрузить VK-доступ.</p> : editing ? <div className={styles.credentialRows}>
-      <label className={styles.credentialRow}><span>Аккаунт фирмы</span><select value={accountID} onChange={event => { setAccountID(event.target.value); if (!event.target.value) setCommunityURL('') }}><option value="">Не выбран</option>{accounts.data.items.map(account => <option value={account.id} key={account.id}>{account.companyName} · {account.login}</option>)}</select></label>
+      <label className={styles.credentialRow}><span>Аккаунт фирмы</span><select value={accountID} onChange={event => { setAccountID(event.target.value); if (!event.target.value) { setCommunityURL(''); setRecipientAccountURL('') } }}><option value="">Не выбран</option>{accounts.data.items.map(account => <option value={account.id} key={account.id}>{account.companyName} · {account.accessMethod === 'PHONE' ? account.phone : account.login}</option>)}</select></label>
       <label className={styles.credentialRow}><span>Сообщество</span><input type="url" required={Boolean(accountID)} disabled={!accountID} value={communityURL} onChange={event => setCommunityURL(event.target.value)} placeholder="https://vk.ru/club240646151" /></label>
-      <div className={styles.vkFormActions}><button type="button" className={styles.ghostButton} onClick={cancel}>Отмена</button><button type="button" className={styles.primaryButton} onClick={() => save.mutate()} disabled={save.isPending || (Boolean(accountID) && !communityURL.trim())}>{save.isPending ? 'Сохраняем…' : 'Сохранить'}</button></div>
+      <label className={styles.credentialRow}><span>Аккаунт, которому выдан доступ</span><input type="url" required={Boolean(accountID)} disabled={!accountID} value={recipientAccountURL} onChange={event => setRecipientAccountURL(event.target.value)} placeholder="https://vk.ru/id123" /></label>
+      <div className={styles.vkFormActions}><button type="button" className={styles.ghostButton} onClick={cancel}>Отмена</button><button type="button" className={styles.primaryButton} onClick={() => save.mutate()} disabled={save.isPending || (Boolean(accountID) && (!communityURL.trim() || !recipientAccountURL.trim()))}>{save.isPending ? 'Сохраняем…' : 'Сохранить'}</button></div>
       {accounts.data.items.length === 0 ? <p className={styles.vkHint}>Сначала <Link to="/app/companies">настройте общий VK-аккаунт у компании</Link>.</p> : null}
       {save.isError ? <p className={styles.error}>{save.error.message}</p> : null}
     </div> : access.data.accountId ? <div className={styles.credentialRows}>
       <div className={styles.credentialRow}><span>Аккаунт фирмы</span><div className={styles.credentialValue}><strong>{access.data.companyName}</strong></div></div>
-      <div className={styles.credentialRow}><span>Логин</span><div className={styles.credentialValue}><strong>{access.data.login}</strong></div></div>
-      <div className={styles.credentialRow}><span>Пароль</span><div className={styles.credentialValue}><strong>{password || '••••••••••••'}</strong>{password ? <button type="button" onClick={() => setPassword('')}>Скрыть</button> : <button type="button" onClick={() => reveal.mutate()} disabled={reveal.isPending}>{reveal.isPending ? 'Открываем…' : 'Показать'}</button>}</div></div>
+      {access.data.accessMethod === 'LOGIN' ? <><div className={styles.credentialRow}><span>Логин</span><div className={styles.credentialValue}><strong>{access.data.login}</strong></div></div><div className={styles.credentialRow}><span>Пароль</span><div className={styles.credentialValue}><strong>{password || '••••••••••••'}</strong>{password ? <button type="button" onClick={() => setPassword('')}>Скрыть</button> : <button type="button" onClick={() => reveal.mutate()} disabled={reveal.isPending}>{reveal.isPending ? 'Открываем…' : 'Показать'}</button>}</div></div></> : <div className={styles.credentialRow}><span>Способ входа</span><div className={styles.credentialValue}><strong>По номеру телефона</strong></div></div>}
       <div className={styles.credentialRow}><span>Телефон</span><div className={styles.credentialValue}><strong className={access.data.phone ? '' : styles.missing}>{access.data.phone || '—'}</strong></div></div>
       <div className={styles.credentialRow}><span>Сообщество</span><div className={styles.credentialValue}><a className={styles.vkCommunityLink} href={access.data.communityUrl} target="_blank" rel="noreferrer">{access.data.communityUrl} ↗</a></div></div>
+      <div className={styles.credentialRow}><span>Аккаунт, которому выдан доступ</span><div className={styles.credentialValue}>{access.data.recipientAccountUrl ? <a className={styles.vkCommunityLink} href={access.data.recipientAccountUrl} target="_blank" rel="noreferrer">{access.data.recipientAccountUrl} ↗</a> : <strong className={styles.missing}>—</strong>}</div></div>
       {reveal.isError ? <p className={styles.error}>{reveal.error.message}</p> : null}
     </div> : <div className={styles.vkEmpty}><strong>Корпоративный VK не выбран</strong><p>Выберите общий аккаунт фирмы и вставьте ссылку на сообщество этого креатора.</p>{accounts.data.items.length === 0 ? <Link to="/app/companies">Настроить VK у компании →</Link> : null}</div>}
   </article>

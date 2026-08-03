@@ -31,10 +31,14 @@ func (s *Server) listCompanyVKAccounts(w http.ResponseWriter, r *http.Request) {
 			problem(w, http.StatusInternalServerError, "VK accounts failed", "could not read company VK account")
 			return
 		}
-		login, err := s.envelope.Decrypt(loginCiphertext, loginNonce)
-		if err != nil {
-			problem(w, http.StatusInternalServerError, "VK accounts failed", "could not decrypt company VK login")
-			return
+		login := ""
+		if len(loginCiphertext) > 0 {
+			plain, decryptErr := s.envelope.Decrypt(loginCiphertext, loginNonce)
+			if decryptErr != nil {
+				problem(w, http.StatusInternalServerError, "VK accounts failed", "could not decrypt company VK login")
+				return
+			}
+			login = string(plain)
 		}
 		phone := ""
 		if len(phoneCiphertext) > 0 {
@@ -45,7 +49,11 @@ func (s *Server) listCompanyVKAccounts(w http.ResponseWriter, r *http.Request) {
 			}
 			phone = string(plain)
 		}
-		items = append(items, map[string]any{"id": id, "companyId": companyID, "companyName": companyName, "login": string(login), "phone": phone, "hasPassword": true, "updatedAt": updatedAt})
+		accessMethod := "PHONE"
+		if login != "" {
+			accessMethod = "LOGIN"
+		}
+		items = append(items, map[string]any{"id": id, "companyId": companyID, "companyName": companyName, "login": login, "phone": phone, "hasPassword": login != "", "accessMethod": accessMethod, "updatedAt": updatedAt})
 	}
 	if err := rows.Err(); err != nil {
 		problem(w, http.StatusInternalServerError, "VK accounts failed", "could not finish reading company VK accounts")
@@ -62,12 +70,29 @@ func (s *Server) saveCompanyVKAccount(w http.ResponseWriter, r *http.Request) {
 	companyID := chi.URLParam(r, "id")
 	p := r.Context().Value(principalKey).(principal)
 	var in struct {
-		Login    string `json:"login"`
-		Password string `json:"password"`
-		Phone    string `json:"phone"`
+		AccessMethod string `json:"accessMethod"`
+		Login        string `json:"login"`
+		Password     string `json:"password"`
+		Phone        string `json:"phone"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || strings.TrimSpace(in.Login) == "" {
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		problem(w, http.StatusBadRequest, "invalid VK account", "expected JSON body")
+		return
+	}
+	accessMethod := strings.ToUpper(strings.TrimSpace(in.AccessMethod))
+	login := strings.TrimSpace(in.Login)
+	password := strings.TrimSpace(in.Password)
+	phone := strings.TrimSpace(in.Phone)
+	if accessMethod != "LOGIN" && accessMethod != "PHONE" {
+		problem(w, http.StatusBadRequest, "invalid VK account", "choose login and password or phone access")
+		return
+	}
+	if accessMethod == "LOGIN" && login == "" {
 		problem(w, http.StatusBadRequest, "invalid VK account", "login is required")
+		return
+	}
+	if accessMethod == "PHONE" && phone == "" {
+		problem(w, http.StatusBadRequest, "invalid VK account", "phone is required for phone access")
 		return
 	}
 	tx, err := s.pool.Begin(r.Context())
@@ -91,22 +116,19 @@ func (s *Server) saveCompanyVKAccount(w http.ResponseWriter, r *http.Request) {
 		problem(w, http.StatusInternalServerError, "VK account save failed", "could not load current VK account")
 		return
 	}
-	password := strings.TrimSpace(in.Password)
-	if loadErr == pgx.ErrNoRows && password == "" {
-		problem(w, http.StatusBadRequest, "invalid VK account", "password is required for a new VK account")
-		return
-	}
-	login := strings.TrimSpace(in.Login)
-	phone := strings.TrimSpace(in.Phone)
 	oldLogin, oldPassword, oldPhone := "", "", ""
 	if loadErr == nil {
-		if plain, decryptErr := s.envelope.Decrypt(existingLoginCiphertext, existingLoginNonce); decryptErr == nil {
+		if len(existingLoginCiphertext) == 0 {
+			oldLogin = ""
+		} else if plain, decryptErr := s.envelope.Decrypt(existingLoginCiphertext, existingLoginNonce); decryptErr == nil {
 			oldLogin = string(plain)
 		} else {
 			problem(w, http.StatusInternalServerError, "VK account save failed", "could not decrypt current login")
 			return
 		}
-		if plain, decryptErr := s.envelope.Decrypt(existingPasswordCiphertext, existingPasswordNonce); decryptErr == nil {
+		if len(existingPasswordCiphertext) == 0 {
+			oldPassword = ""
+		} else if plain, decryptErr := s.envelope.Decrypt(existingPasswordCiphertext, existingPasswordNonce); decryptErr == nil {
 			oldPassword = string(plain)
 		} else {
 			problem(w, http.StatusInternalServerError, "VK account save failed", "could not decrypt current password")
@@ -121,17 +143,20 @@ func (s *Server) saveCompanyVKAccount(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	newPassword := password
-	if newPassword == "" {
-		newPassword = oldPassword
+	if accessMethod == "LOGIN" && password == "" {
+		if loadErr == pgx.ErrNoRows || oldPassword == "" {
+			problem(w, http.StatusBadRequest, "invalid VK account", "password is required for login access")
+			return
+		}
+		password = oldPassword
 	}
-	loginCiphertext, loginNonce, err := s.envelope.Encrypt([]byte(login))
-	if err != nil {
-		problem(w, http.StatusInternalServerError, "VK account save failed", "could not encrypt login")
-		return
-	}
-	passwordCiphertext, passwordNonce := existingPasswordCiphertext, existingPasswordNonce
-	if password != "" {
+	var loginCiphertext, loginNonce, passwordCiphertext, passwordNonce []byte
+	if accessMethod == "LOGIN" {
+		loginCiphertext, loginNonce, err = s.envelope.Encrypt([]byte(login))
+		if err != nil {
+			problem(w, http.StatusInternalServerError, "VK account save failed", "could not encrypt login")
+			return
+		}
 		passwordCiphertext, passwordNonce, err = s.envelope.Encrypt([]byte(password))
 		if err != nil {
 			problem(w, http.StatusInternalServerError, "VK account save failed", "could not encrypt password")
@@ -154,10 +179,10 @@ func (s *Server) saveCompanyVKAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	changes := make([]creatorHistoryChange, 0, 3)
 	if loadErr == nil && oldLogin != login {
-		changes = append(changes, creatorHistoryChange{Section: "VK_COMPANY", FieldKey: "login", OldPresent: oldLogin != "", NewPresent: true, OldValue: oldLogin, NewValue: login})
+		changes = append(changes, creatorHistoryChange{Section: "VK_COMPANY", FieldKey: "login", OldPresent: oldLogin != "", NewPresent: login != "", OldValue: oldLogin, NewValue: login})
 	}
-	if loadErr == nil && oldPassword != newPassword {
-		changes = append(changes, creatorHistoryChange{Section: "VK_COMPANY", FieldKey: "password", IsSecret: true, OldPresent: true, NewPresent: true, OldCiphertext: existingPasswordCiphertext, OldNonce: existingPasswordNonce, NewCiphertext: passwordCiphertext, NewNonce: passwordNonce})
+	if loadErr == nil && oldPassword != password {
+		changes = append(changes, creatorHistoryChange{Section: "VK_COMPANY", FieldKey: "password", IsSecret: true, OldPresent: oldPassword != "", NewPresent: password != "", OldCiphertext: existingPasswordCiphertext, OldNonce: existingPasswordNonce, NewCiphertext: passwordCiphertext, NewNonce: passwordNonce})
 	}
 	if loadErr == nil && oldPhone != phone {
 		changes = append(changes, creatorHistoryChange{Section: "VK_COMPANY", FieldKey: "phone", OldPresent: oldPhone != "", NewPresent: phone != "", OldValue: oldPhone, NewValue: phone})
@@ -220,6 +245,10 @@ func (s *Server) revealCompanyVKPassword(w http.ResponseWriter, r *http.Request)
 		problem(w, http.StatusInternalServerError, "reveal failed", "could not load company VK password")
 		return
 	}
+	if len(ciphertext) == 0 {
+		problem(w, http.StatusBadRequest, "reveal unavailable", "this VK account uses phone access")
+		return
+	}
 	plain, err := s.envelope.Decrypt(ciphertext, nonce)
 	if err != nil {
 		problem(w, http.StatusInternalServerError, "reveal failed", "could not decrypt company VK password")
@@ -261,21 +290,25 @@ func (s *Server) getCreatorVKAccess(w http.ResponseWriter, r *http.Request) {
 		problem(w, http.StatusNotFound, "not found", "creator does not exist")
 		return
 	}
-	var accountID, companyID, companyName, communityURL string
+	var accountID, companyID, companyName, communityURL, recipientAccountURL string
 	var loginCiphertext, loginNonce, phoneCiphertext, phoneNonce []byte
-	err := s.pool.QueryRow(r.Context(), `SELECT a.id,a.company_id,c.name,v.community_url,a.login_ciphertext,a.login_nonce,a.phone_ciphertext,a.phone_nonce FROM creator_vk_assignments v JOIN company_vk_accounts a ON a.id=v.company_vk_account_id JOIN companies c ON c.id=a.company_id WHERE v.creator_id=$1 AND a.organization_id=$2`, creatorID, p.OrganizationID).Scan(&accountID, &companyID, &companyName, &communityURL, &loginCiphertext, &loginNonce, &phoneCiphertext, &phoneNonce)
+	err := s.pool.QueryRow(r.Context(), `SELECT a.id,a.company_id,c.name,v.community_url,v.recipient_account_url,a.login_ciphertext,a.login_nonce,a.phone_ciphertext,a.phone_nonce FROM creator_vk_assignments v JOIN company_vk_accounts a ON a.id=v.company_vk_account_id JOIN companies c ON c.id=a.company_id WHERE v.creator_id=$1 AND a.organization_id=$2`, creatorID, p.OrganizationID).Scan(&accountID, &companyID, &companyName, &communityURL, &recipientAccountURL, &loginCiphertext, &loginNonce, &phoneCiphertext, &phoneNonce)
 	if err == pgx.ErrNoRows {
-		writeJSON(w, http.StatusOK, map[string]any{"accountId": "", "companyId": "", "companyName": "", "login": "", "phone": "", "hasPassword": false, "communityUrl": ""})
+		writeJSON(w, http.StatusOK, map[string]any{"accountId": "", "companyId": "", "companyName": "", "login": "", "phone": "", "hasPassword": false, "accessMethod": "", "communityUrl": "", "recipientAccountUrl": ""})
 		return
 	}
 	if err != nil {
 		problem(w, http.StatusInternalServerError, "VK access failed", "could not load creator VK access")
 		return
 	}
-	login, err := s.envelope.Decrypt(loginCiphertext, loginNonce)
-	if err != nil {
-		problem(w, http.StatusInternalServerError, "VK access failed", "could not decrypt company VK login")
-		return
+	login := ""
+	if len(loginCiphertext) > 0 {
+		plain, decryptErr := s.envelope.Decrypt(loginCiphertext, loginNonce)
+		if decryptErr != nil {
+			problem(w, http.StatusInternalServerError, "VK access failed", "could not decrypt company VK login")
+			return
+		}
+		login = string(plain)
 	}
 	phone := ""
 	if len(phoneCiphertext) > 0 {
@@ -286,15 +319,20 @@ func (s *Server) getCreatorVKAccess(w http.ResponseWriter, r *http.Request) {
 		}
 		phone = string(plain)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"accountId": accountID, "companyId": companyID, "companyName": companyName, "login": string(login), "phone": phone, "hasPassword": true, "communityUrl": communityURL})
+	accessMethod := "PHONE"
+	if login != "" {
+		accessMethod = "LOGIN"
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"accountId": accountID, "companyId": companyID, "companyName": companyName, "login": login, "phone": phone, "hasPassword": login != "", "accessMethod": accessMethod, "communityUrl": communityURL, "recipientAccountUrl": recipientAccountURL})
 }
 
 func (s *Server) saveCreatorVKAccess(w http.ResponseWriter, r *http.Request) {
 	creatorID := chi.URLParam(r, "id")
 	p := r.Context().Value(principalKey).(principal)
 	var in struct {
-		AccountID    string `json:"accountId"`
-		CommunityURL string `json:"communityUrl"`
+		AccountID           string `json:"accountId"`
+		CommunityURL        string `json:"communityUrl"`
+		RecipientAccountURL string `json:"recipientAccountUrl"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		problem(w, http.StatusBadRequest, "invalid VK access", "expected JSON body")
@@ -302,11 +340,17 @@ func (s *Server) saveCreatorVKAccess(w http.ResponseWriter, r *http.Request) {
 	}
 	accountID := strings.TrimSpace(in.AccountID)
 	communityURL := ""
+	recipientAccountURL := ""
 	if accountID != "" {
 		var valid bool
 		communityURL, valid = normalizeVKCommunityURL(in.CommunityURL)
 		if !valid {
 			problem(w, http.StatusBadRequest, "invalid VK access", "a vk.ru or vk.com community link is required")
+			return
+		}
+		recipientAccountURL, valid = normalizeVKCommunityURL(in.RecipientAccountURL)
+		if !valid {
+			problem(w, http.StatusBadRequest, "invalid VK access", "a vk.ru or vk.com account link is required")
 			return
 		}
 	}
@@ -316,8 +360,8 @@ func (s *Server) saveCreatorVKAccess(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback(r.Context())
-	var oldAccountID, oldCompanyName, oldCommunityURL string
-	err = tx.QueryRow(r.Context(), `SELECT COALESCE(v.company_vk_account_id::text,''),COALESCE(c.name,''),COALESCE(v.community_url,'') FROM creators cr LEFT JOIN creator_vk_assignments v ON v.creator_id=cr.id LEFT JOIN company_vk_accounts a ON a.id=v.company_vk_account_id LEFT JOIN companies c ON c.id=a.company_id WHERE cr.id=$1 AND cr.organization_id=$2 FOR UPDATE OF cr`, creatorID, p.OrganizationID).Scan(&oldAccountID, &oldCompanyName, &oldCommunityURL)
+	var oldAccountID, oldCompanyName, oldCommunityURL, oldRecipientAccountURL string
+	err = tx.QueryRow(r.Context(), `SELECT COALESCE(v.company_vk_account_id::text,''),COALESCE(c.name,''),COALESCE(v.community_url,''),COALESCE(v.recipient_account_url,'') FROM creators cr LEFT JOIN creator_vk_assignments v ON v.creator_id=cr.id LEFT JOIN company_vk_accounts a ON a.id=v.company_vk_account_id LEFT JOIN companies c ON c.id=a.company_id WHERE cr.id=$1 AND cr.organization_id=$2 FOR UPDATE OF cr`, creatorID, p.OrganizationID).Scan(&oldAccountID, &oldCompanyName, &oldCommunityURL, &oldRecipientAccountURL)
 	if err == pgx.ErrNoRows {
 		problem(w, http.StatusNotFound, "not found", "creator does not exist")
 		return
@@ -336,7 +380,7 @@ func (s *Server) saveCreatorVKAccess(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if oldAccountID == accountID && oldCommunityURL == communityURL {
+	if oldAccountID == accountID && oldCommunityURL == communityURL && oldRecipientAccountURL == recipientAccountURL {
 		if err = tx.Commit(r.Context()); err != nil {
 			problem(w, http.StatusInternalServerError, "VK access save failed", "could not finish update")
 			return
@@ -349,22 +393,25 @@ func (s *Server) saveCreatorVKAccess(w http.ResponseWriter, r *http.Request) {
 			problem(w, http.StatusInternalServerError, "VK access save failed", "could not clear creator VK access")
 			return
 		}
-	} else if _, err = tx.Exec(r.Context(), `INSERT INTO creator_vk_assignments(creator_id,company_vk_account_id,community_url,updated_by) VALUES($1,$2,$3,$4) ON CONFLICT(creator_id) DO UPDATE SET company_vk_account_id=excluded.company_vk_account_id,community_url=excluded.community_url,updated_by=excluded.updated_by,updated_at=now()`, creatorID, accountID, communityURL, p.ID); err != nil {
+	} else if _, err = tx.Exec(r.Context(), `INSERT INTO creator_vk_assignments(creator_id,company_vk_account_id,community_url,recipient_account_url,updated_by) VALUES($1,$2,$3,$4,$5) ON CONFLICT(creator_id) DO UPDATE SET company_vk_account_id=excluded.company_vk_account_id,community_url=excluded.community_url,recipient_account_url=excluded.recipient_account_url,updated_by=excluded.updated_by,updated_at=now()`, creatorID, accountID, communityURL, recipientAccountURL, p.ID); err != nil {
 		problem(w, http.StatusInternalServerError, "VK access save failed", "could not save creator VK access")
 		return
 	}
-	changes := make([]creatorHistoryChange, 0, 2)
+	changes := make([]creatorHistoryChange, 0, 3)
 	if oldAccountID != accountID {
 		changes = append(changes, creatorHistoryChange{Section: "VK_SHARED", FieldKey: "account", OldPresent: oldAccountID != "", NewPresent: accountID != "", OldValue: oldCompanyName, NewValue: newCompanyName})
 	}
 	if oldCommunityURL != communityURL {
 		changes = append(changes, creatorHistoryChange{Section: "VK_SHARED", FieldKey: "communityUrl", OldPresent: oldCommunityURL != "", NewPresent: communityURL != "", OldValue: oldCommunityURL, NewValue: communityURL})
 	}
+	if oldRecipientAccountURL != recipientAccountURL {
+		changes = append(changes, creatorHistoryChange{Section: "VK_SHARED", FieldKey: "recipientAccountUrl", OldPresent: oldRecipientAccountURL != "", NewPresent: recipientAccountURL != "", OldValue: oldRecipientAccountURL, NewValue: recipientAccountURL})
+	}
 	if err = insertCreatorHistory(r, tx, p, creatorID, "CREDENTIALS", changes); err != nil {
 		problem(w, http.StatusInternalServerError, "VK access save failed", "could not save creator history")
 		return
 	}
-	if _, err = tx.Exec(r.Context(), `INSERT INTO audit_logs(organization_id,actor_id,action,entity_type,entity_id,metadata) VALUES($1,$2,'UPDATE_VK_ACCESS','CREATOR',$3,jsonb_build_object('companyVkAccountId',NULLIF($4::text,''),'communityUrl',NULLIF($5::text,'')))`, p.OrganizationID, p.ID, creatorID, accountID, communityURL); err != nil {
+	if _, err = tx.Exec(r.Context(), `INSERT INTO audit_logs(organization_id,actor_id,action,entity_type,entity_id,metadata) VALUES($1,$2,'UPDATE_VK_ACCESS','CREATOR',$3,jsonb_build_object('companyVkAccountId',NULLIF($4::text,''),'communityUrl',NULLIF($5::text,''),'recipientAccountUrl',NULLIF($6::text,'')))`, p.OrganizationID, p.ID, creatorID, accountID, communityURL, recipientAccountURL); err != nil {
 		problem(w, http.StatusInternalServerError, "VK access save failed", "could not save audit record")
 		return
 	}

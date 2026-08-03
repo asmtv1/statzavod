@@ -1,20 +1,25 @@
-.page { display: grid; gap: 1.25rem; }
+.page { display: grid; gap: 1.5rem; max-width: 74rem; }
+.page header { max-width: 52rem; }
 .page header p { color: var(--gold); font-size: .66rem; font-weight: 750; letter-spacing: .16em; margin: 0; }
-.page header h1 { margin: .15rem 0 .35rem; letter-spacing: -.045em; }
-.page header span { color: var(--muted); }
-.create { display: flex; align-items: end; gap: .8rem; padding: 1.1rem; background: linear-gradient(145deg,#2a2d2d,#202222); border: 1px solid var(--border); border-radius: 1rem; }
-.create label { display: grid; flex: 1; gap: .4rem; font-size: .84rem; font-weight: 650; }
-.create input { color: var(--text); background: #191b1b; border: 1px solid var(--border); padding: .68rem; border-radius: .45rem; font: inherit; }
-.grid { display: grid; grid-template-columns: repeat(auto-fill,minmax(18rem,1fr)); gap: .8rem; }
-.grid article { display: grid; grid-template-columns: 2.7rem 1fr auto; align-items: center; gap: .8rem; padding: 1.1rem; background: linear-gradient(145deg,#2a2d2d,#202222); border: 1px solid var(--border); border-radius: 1rem; }
+.page header h1 { margin: .2rem 0 .5rem; letter-spacing: -.045em; }
+.page header span { color: var(--muted); line-height: 1.5; }
+.create { display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: end; gap: 1rem; padding: 1.25rem; background: linear-gradient(145deg,#2d3030,#202222); border: 1px solid var(--border); border-radius: 1rem; box-shadow: inset 0 1px rgb(255 255 255 / 4%); }
+.create label { display: grid; min-width: 0; gap: .48rem; font-size: .84rem; font-weight: 650; }
+.create input { width: 100%; min-width: 0; color: var(--text); background: #191b1b; border: 1px solid var(--border); padding: .72rem .8rem; border-radius: .55rem; font: inherit; }
+.create > button { white-space: nowrap; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill,minmax(min(100%,32rem),1fr)); gap: 1rem; }
+.grid article { display: grid; grid-template-columns: 3rem minmax(0,1fr); grid-template-areas: "mark info" "mark actions"; align-items: center; column-gap: 1rem; row-gap: 1rem; min-width: 0; padding: 1.15rem; background: linear-gradient(145deg,#2a2d2d,#202222); border: 1px solid var(--border); border-radius: 1rem; box-shadow: inset 0 1px rgb(255 255 255 / 4%); }
+.grid article:hover { border-color: rgb(229 184 106 / 30%); }
 .grid h2,.grid p { margin: 0; }
-.grid h2 { font-size: 1rem; }
+.grid h2 { font-size: 1.05rem; overflow-wrap: anywhere; }
 .grid p { color: var(--muted); font-size: .82rem; margin-top: .25rem; }
-.mark { display: grid; place-items: center; width: 2.7rem; height: 2.7rem; border-radius: .7rem; color: #211e1a; background: linear-gradient(145deg,#e3b268,#cc8766); font-weight: 800; }
+.mark { grid-area: mark; display: grid; place-items: center; width: 3rem; height: 3rem; align-self: start; border-radius: .8rem; color: #211e1a; background: linear-gradient(145deg,#e3b268,#cc8766); font-weight: 800; }
+.companyInfo { grid-area: info; min-width: 0; }
 .archive,.dialog button,.actions button { border: 0; background: transparent; color: var(--muted); cursor: pointer; font: inherit; }
-.archive { font-size: .78rem; }
-.actions { display: flex; align-items: center; gap: .55rem; }
-.actions .vkSetup,.actions .vkReady { padding: .42rem .58rem; border-radius: .42rem; font-size: .76rem; font-weight: 700; }
+.archive { padding: .42rem 0; font-size: .78rem; text-align: left; }
+.archive:hover { color: #f0a097; }
+.actions { grid-area: actions; display: flex; flex-wrap: wrap; align-items: center; gap: .7rem 1rem; min-width: 0; }
+.actions .vkSetup,.actions .vkReady { padding: .5rem .7rem; border-radius: .5rem; font-size: .76rem; font-weight: 700; white-space: nowrap; }
 .actions .vkSetup { color: #e8c879; background: rgb(229 184 106/.09); border: 1px solid rgb(229 184 106/.22); }
 .actions .vkReady { color: #bcefd0; background: rgb(156 229 189/.11); border: 1px solid rgb(156 229 189/.2); }
 .state,.error { padding: 1.25rem; background: #202222; border: 1px solid var(--border); border-radius: 1rem; }
@@ -30,10 +35,16 @@
 .dialogHead h2 { margin: .18rem 0 0; }
 .dialogHead > button { font-size: 1.65rem; line-height: 1; }
 .vkDialog { width: min(100%,36rem); }
+.accessMethod { display: flex; flex-wrap: wrap; gap: .6rem; margin: 1.1rem 0 0; padding: 0; border: 0; }
+.accessMethod legend { width: 100%; margin-bottom: .05rem; font-size: .8rem; font-weight: 650; }
+.accessMethod label { display: inline-flex; align-items: center; gap: .42rem; padding: .52rem .68rem; color: var(--muted); background: #191b1b; border: 1px solid var(--border); border-radius: .5rem; font-size: .78rem; cursor: pointer; }
+.accessMethod label:has(input:checked) { color: #f1d087; border-color: rgb(229 184 106 / 42%); background: rgb(229 184 106 / 10%); }
+.accessMethod input { accent-color: #dfad62; }
 .vkFields { display: grid; gap: .8rem; margin: 1.1rem 0; }
 .vkFields label { display: grid; gap: .38rem; font-size: .8rem; font-weight: 650; }
 .vkFields input { width: 100%; color: var(--text); background: #191b1b; border: 1px solid var(--border); padding: .68rem; border-radius: .45rem; font: inherit; }
 .passwordField { display: flex; align-items: center; gap: .5rem; }
 .passwordField button { flex: none; color: #e8c879; padding: .62rem .7rem; border: 1px solid rgb(229 184 106/.22); border-radius: .45rem; }
 .dialog footer .saveVK { color: #211e1a; padding: .6rem .8rem; background: linear-gradient(135deg,#e4b667,#c98454); border-radius: .48rem; font-weight: 750; }
-@media (max-width:620px) { .create { align-items: stretch; flex-direction: column; } .grid article { grid-template-columns: 2.7rem 1fr; } .actions { grid-column: 2; align-items: start; flex-direction: column; } .passwordField { align-items: stretch; flex-direction: column; } }
+@media (max-width:900px) { .page { gap: 1.25rem; } .create { grid-template-columns: 1fr; align-items: stretch; } .create > button { width: 100%; } .grid { grid-template-columns: 1fr; } }
+@media (max-width:620px) { .grid article { grid-template-columns: 2.7rem minmax(0,1fr); column-gap: .8rem; padding: 1rem; } .mark { width: 2.7rem; height: 2.7rem; border-radius: .7rem; } .actions { align-items: stretch; flex-direction: column; gap: .45rem; } .actions .vkSetup,.actions .vkReady { width: 100%; } .archive { padding: .5rem 0; } .passwordField { align-items: stretch; flex-direction: column; } }

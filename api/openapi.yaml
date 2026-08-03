@@ -59,7 +59,7 @@ paths:
     put:
       summary: Create or update the single shared VK account for a company
       parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
-      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [login], properties: { login: { type: string }, password: { type: string, format: password }, phone: { type: string } } } } } }
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [accessMethod], properties: { accessMethod: { type: string, enum: [LOGIN, PHONE] }, login: { type: string }, password: { type: string, format: password }, phone: { type: string } } } } } }
       responses: { '200': { description: Saved }, '400': { $ref: '#/components/responses/Problem' }, '404': { $ref: '#/components/responses/Problem' } }
   /company-vk-accounts/{id}/password/reveal:
     post:
@@ -85,7 +85,7 @@ paths:
     put:
       summary: Assign a shared company VK account and community to a creator
       parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
-      requestBody: { required: true, content: { application/json: { schema: { type: object, properties: { accountId: { type: string, format: uuid, nullable: true }, communityUrl: { type: string, format: uri, example: 'https://vk.ru/club240646151' } } } } } }
+      requestBody: { required: true, content: { application/json: { schema: { type: object, properties: { accountId: { type: string, format: uuid, nullable: true }, communityUrl: { type: string, format: uri, example: 'https://vk.ru/club240646151' }, recipientAccountUrl: { type: string, format: uri, example: 'https://vk.ru/id123' } } } } } }
       responses: { '204': { description: Saved }, '400': { $ref: '#/components/responses/Problem' }, '404': { $ref: '#/components/responses/Problem' } }
   /creators/{id}/archive:
     post:
