@@ -114,8 +114,11 @@ time {
 .telegram { color: #74b9e8; font-size: .82rem; }
 .unassigned { color: var(--muted); font-size: .82rem; }
 .workOk { width: max-content; color: #bcefd0; background: rgb(156 229 189 / 12%); border: 1px solid rgb(156 229 189 / 18%); border-radius: .4rem; padding: .28rem .45rem; font-size: .74rem; font-weight: 700; }
-.workAttention { color: #ffb4a9; font-size: .78rem; line-height: 1.35; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
-.workInProgress { color: #ffe29a; background: rgb(229 184 106 / 10%); border: 1px solid rgb(229 184 106 / 22%); border-radius: .4rem; padding: .3rem .45rem; font-size: .76rem; line-height: 1.35; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+.workCell { display: grid; justify-items: start; gap: .42rem; min-width: 0; }
+.workAttention,.workComment { min-width: 0; overflow-wrap: anywhere; white-space: pre-wrap; font-size: .78rem; line-height: 1.45; }
+.workAttention { color: #ffb4a9; }
+.workInProgress { width: max-content; color: #ffe29a; background: rgb(229 184 106 / 10%); border: 1px solid rgb(229 184 106 / 22%); border-radius: .4rem; padding: .28rem .45rem; font-size: .74rem; font-weight: 700; }
+.workComment { color: #ffe29a; }
 .backdrop {
   position: fixed;
   inset: 0;
