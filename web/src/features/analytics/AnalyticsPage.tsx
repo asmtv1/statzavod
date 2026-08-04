@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { api, type CreatorAnalytics } from '../../shared/api/client'
@@ -16,14 +16,18 @@ export function AnalyticsPage() {
   const [to,setTo] = useState(today)
   const [selected,setSelected] = useState<string[]>([])
   const [companyFilter,setCompanyFilter] = useState('ALL')
+  const selectionInitialized = useRef(false)
   const visibleCreators = creators.data?.items.filter(creator => companyFilter === 'ALL' || (companyFilter === 'NONE' ? !creator.companyId : creator.companyId === companyFilter)) ?? []
   const report = useMutation({
     mutationFn: async () => Promise.all(selected.map(id => api.creatorAnalytics(id,from,to))),
   })
 
   useEffect(() => {
-    if (!selected.length && creators.data?.items.length) setSelected(creators.data.items.filter(creator => creator.status !== 'DISMISSED').map(creator => creator.id))
-  }, [creators.data, selected.length])
+    if (!selectionInitialized.current && creators.data) {
+      selectionInitialized.current = true
+      setSelected(creators.data.items.filter(creator => creator.status !== 'DISMISSED').map(creator => creator.id))
+    }
+  }, [creators.data])
 
   const reports = report.data ?? []
   const totals = useMemo(() => {
@@ -35,6 +39,14 @@ export function AnalyticsPage() {
 
   const toggle = (id:string) => setSelected(current => current.includes(id) ? current.filter(item => item !== id) : [...current,id])
   const selectAll = () => setSelected(visibleCreators.map(item => item.id))
+  const changeCompany = (next:string) => {
+    setCompanyFilter(next)
+    const visibleIDs = new Set(creators.data?.items
+      .filter(creator => next === 'ALL' || (next === 'NONE' ? !creator.companyId : creator.companyId === next))
+      .map(creator => creator.id) ?? [])
+    setSelected(current => current.filter(id => visibleIDs.has(id)))
+  }
+  const allVisibleSelected = visibleCreators.length > 0 && visibleCreators.every(creator => selected.includes(creator.id))
 
   return <section className={styles.page}>
     <header><div><p>ОТЧЁТЫ И СРАВНЕНИЯ</p><h1>Аналитика</h1><span>Соберите статистику по одному или нескольким креаторам за нужный период.</span></div></header>
@@ -45,7 +57,7 @@ export function AnalyticsPage() {
         <label>По<input type="date" value={to} onChange={event => setTo(event.target.value)}/></label>
       </div>
       <div className={styles.people}>
-        <div className={styles.peopleHead}><div><b>Креаторы</b><small>Выбрано: {selected.length}</small></div><div className={styles.peopleTools}><select aria-label="Компания" value={companyFilter} onChange={event => { const next = event.target.value; setCompanyFilter(next); setSelected(creators.data?.items.filter(creator => creator.status !== 'DISMISSED' && (next === 'ALL' || (next === 'NONE' ? !creator.companyId : creator.companyId === next))).map(creator => creator.id) ?? []) }}><option value="ALL">Все компании</option>{companies.data?.items.map(company => <option value={company.id} key={company.id}>{company.name}</option>)}<option value="NONE">Без компании</option></select><button onClick={selected.length === visibleCreators.length ? () => setSelected([]) : selectAll}>{selected.length === visibleCreators.length ? 'Снять выбор' : 'Выбрать всех'}</button></div></div>
+        <div className={styles.peopleHead}><div><b>Креаторы</b><small>Выбрано: {selected.length}</small></div><div className={styles.peopleTools}><select aria-label="Компания" value={companyFilter} onChange={event => changeCompany(event.target.value)}><option value="ALL">Все компании</option>{companies.data?.items.map(company => <option value={company.id} key={company.id}>{company.name}</option>)}<option value="NONE">Без компании</option></select><button onClick={allVisibleSelected ? () => setSelected([]) : selectAll}>{allVisibleSelected ? 'Снять выбор' : 'Выбрать всех'}</button></div></div>
         <div className={styles.peopleList}>{creators.isPending ? <span>Загружаем список…</span> : visibleCreators.map(creator => <label key={creator.id}><input type="checkbox" checked={selected.includes(creator.id)} onChange={() => toggle(creator.id)}/><span><b>{creator.displayName}</b><small>{creator.companyName || 'Без компании'} · {creator.status === 'ACTIVE' ? 'Активен' : creator.status === 'ON_LEAVE' ? 'В отпуске' : 'Уволен'}</small></span></label>)}</div>
       </div>
       <div className={styles.builderActions}><span>{from && to ? `${new Date(from).toLocaleDateString('ru-RU')} — ${new Date(to).toLocaleDateString('ru-RU')}` : 'Укажите период'}</span><button onClick={() => report.mutate()} disabled={!selected.length || !from || !to || report.isPending}>{report.isPending ? 'Собираем…' : 'Собрать статистику'}</button></div>
