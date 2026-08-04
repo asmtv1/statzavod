@@ -404,40 +404,12 @@ function PlatformConnections({ creatorID }: { creatorID: string }) {
   const [deletedPlatform, setDeletedPlatform] = useState<Platform | null>(null)
   const [pendingDeletion, setPendingDeletion] = useState<PlatformConnection | null>(null)
   const [deleteError, setDeleteError] = useState('')
-  const [sharedInvitation, setSharedInvitation] = useState<{ id: string; connectionUrl: string; expiresAt: string } | null>(null)
-  const [invitationCopied, setInvitationCopied] = useState(false)
   const connections = useQuery({ queryKey: ['platform-connections', creatorID], queryFn: () => api.connections(creatorID) })
   const integrations = useQuery({ queryKey: ['integrations'], queryFn: api.integrations })
-  const instagramInvitation = useQuery({ queryKey: ['instagram-connection-invitation', creatorID], queryFn: () => api.instagramConnectionInvitation(creatorID) })
   const authorize = useMutation({
     mutationFn: (platform: string) => api.startAuthorization(creatorID, platform),
     onSuccess: ({ authorizationUrl }) => window.location.assign(authorizationUrl),
   })
-  const createInvitation = useMutation({
-    mutationFn: () => api.createInstagramConnectionInvitation(creatorID),
-    onSuccess: async (invitation) => {
-      setInvitationCopied(false)
-      setSharedInvitation(invitation)
-      await queryClient.invalidateQueries({ queryKey: ['instagram-connection-invitation', creatorID] })
-    },
-  })
-  const revokeInvitation = useMutation({
-    mutationFn: (invitationID: string) => api.revokeInstagramConnectionInvitation(creatorID, invitationID),
-    onSuccess: async () => {
-      setSharedInvitation(null)
-      setInvitationCopied(false)
-      await queryClient.invalidateQueries({ queryKey: ['instagram-connection-invitation', creatorID] })
-    },
-  })
-  const copyInvitation = async () => {
-    if (!sharedInvitation) return
-    try {
-      await navigator.clipboard.writeText(sharedInvitation.connectionUrl)
-      setInvitationCopied(true)
-    } catch {
-      setInvitationCopied(false)
-    }
-  }
   const refresh = async () => {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ['platform-connections', creatorID] }),
@@ -477,18 +449,15 @@ function PlatformConnections({ creatorID }: { creatorID: string }) {
     <div className={styles.connectionHead}><div><h2>Подключения платформ</h2><p>Официальные OAuth-подключения для автоматического сбора статистики.</p></div></div>
     {result && result !== 'connected' ? <p className={styles.error}>Подключение {callbackPlatform ?? 'аккаунта'} не завершено: {result}.</p> : null}
     {authorize.isError ? <p className={styles.error}>{authorize.error.message}</p> : null}
-    {createInvitation.isError ? <p className={styles.error}>{createInvitation.error.message}</p> : null}
-    {revokeInvitation.isError ? <p className={styles.error}>{revokeInvitation.error.message}</p> : null}
     {deleteError ? <p className={styles.error}>{deleteError}</p> : null}
     <div className={styles.platformGrid}>{platformOptions.map(platform => {
       const platformConnections = connections.data?.items.filter(item => item.platform === platform.id) ?? []
       const isConfigured = configured.get(platform.id)
       return <article className={styles.platformCard} key={platform.id}>
         <div><b>{platform.name}</b><span>{platform.hint}</span><small>{platformConnections.length ? `Аккаунтов: ${platformConnections.length}` : isConfigured === false ? 'Нужны OAuth-реквизиты' : 'Нет подключений'}</small></div>
-        <div><button onClick={() => authorize.mutate(platform.id)} disabled={authorize.isPending || integrations.isPending || isConfigured === false}>{authorize.isPending && authorize.variables === platform.id ? 'Переходим…' : 'Подключить'}</button>{platform.id === 'INSTAGRAM' ? <><button onClick={() => createInvitation.mutate()} disabled={createInvitation.isPending || integrations.isPending || isConfigured === false}>{createInvitation.isPending ? 'Создаём…' : instagramInvitation.data?.invitation ? 'Обновить ссылку' : 'Ссылка креатору'}</button><button onClick={() => authorize.mutate('instagram-facebook')} disabled={authorize.isPending || integrations.isPending} title="Нужна Facebook Page, связанная с профессиональным Instagram">Через Facebook · коллаборации</button></> : null}</div>
+        <div><button onClick={() => authorize.mutate(platform.id)} disabled={authorize.isPending || integrations.isPending || isConfigured === false}>{authorize.isPending && authorize.variables === platform.id ? 'Переходим…' : 'Подключить'}</button>{platform.id === 'INSTAGRAM' ? <button onClick={() => authorize.mutate('instagram-facebook')} disabled={authorize.isPending || integrations.isPending} title="Нужна Facebook Page, связанная с профессиональным Instagram">Через Facebook · коллаборации</button> : null}</div>
       </article>
     })}</div>
-    {instagramInvitation.data?.invitation ? <div className={styles.invitationStatus}><div><b>Ссылка для креатора активна</b><span>До {new Date(instagramInvitation.data.invitation.expiresAt).toLocaleString('ru-RU')}. Выпуск новой ссылки автоматически отзовёт эту.</span></div><button type="button" onClick={() => revokeInvitation.mutate(instagramInvitation.data.invitation!.id)} disabled={revokeInvitation.isPending}>Отозвать</button></div> : null}
     {connections.isPending ? <p>Загружаем подключения…</p> : connections.data?.items.length ? <div className={styles.connectionList}>{connections.data.items.map(connection => <article key={connection.id}>
       <div>{connection.avatarUrl ? <img src={connection.avatarUrl} alt="" /> : null}<div><b>{connection.displayName}</b><span>{connection.platform} · @{connection.username} · {connectionStatus(connection.status)}</span><small>{connectionPermissions(connection.platform, connection.scopes)}{connection.lastSyncedAt ? ` · синхронизация ${new Date(connection.lastSyncedAt).toLocaleString('ru-RU')}` : ''}</small></div></div>
       <div className={styles.connectionActions}>{connection.profileUrl ? <a href={connection.profileUrl} target="_blank" rel="noreferrer">Открыть</a> : null}<button className={styles.danger} onClick={() => { setDeleteError(''); setPendingDeletion(connection) }} disabled={purge.isPending}>Удалить подключение</button></div>
@@ -499,15 +468,6 @@ function PlatformConnections({ creatorID }: { creatorID: string }) {
         <p>Доступ платформы будет отозван. Аккаунт, публикации, метрики и задания синхронизации будут удалены без возможности восстановления.</p>
         {deleteError ? <p className={styles.error}>{deleteError}</p> : null}
         <div className={styles.dialogActions}><button type="button" onClick={() => setPendingDeletion(null)} disabled={purge.isPending}>Отмена</button><button type="button" className={styles.confirmDanger} onClick={() => purge.mutate(pendingDeletion)} disabled={purge.isPending}>{purge.isPending ? 'Удаляем…' : 'Удалить всё'}</button></div>
-      </div>
-    </div> : null}
-    {sharedInvitation ? <div className={styles.dialogBackdrop} role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setSharedInvitation(null) }}>
-      <div className={styles.shareDialog} role="dialog" aria-modal="true" aria-labelledby="share-instagram-title">
-        <div><span className={styles.shareMark}>↗</span><div><h3 id="share-instagram-title">Ссылка для подключения Instagram</h3><p>Отправьте её креатору любым удобным способом.</p></div></div>
-        <p>Креатор подтвердит доступ на своём телефоне и не получит доступ к кабинету Статзавода.</p>
-        <div className={styles.shareField}><input value={sharedInvitation.connectionUrl} readOnly onFocus={(event) => event.currentTarget.select()} aria-label="Ссылка для креатора"/><button type="button" onClick={copyInvitation}>{invitationCopied ? 'Скопировано' : 'Копировать'}</button></div>
-        <small>Действует до {new Date(sharedInvitation.expiresAt).toLocaleString('ru-RU')} и станет недоступна после успешного подключения.</small>
-        <div className={styles.dialogActions}><button type="button" onClick={() => setSharedInvitation(null)}>Готово</button></div>
       </div>
     </div> : null}
     {showConnectedToast ? <div className={styles.connectionToast} role="status"><span className={styles.toastMark}>✓</span><div><b>{callbackPlatform ?? 'Аккаунт'} подключён</b><span>Доступ к данным добавлен</span></div><button type="button" aria-label="Закрыть уведомление" onClick={() => setShowConnectedToast(false)}>×</button></div> : null}

@@ -24,33 +24,6 @@ paths:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
         - { name: platform, in: path, required: true, schema: { type: string, enum: [youtube, instagram, tiktok, vk] } }
       responses: { '200': { description: Authorization URL }, '404': { $ref: '#/components/responses/Problem' }, '503': { $ref: '#/components/responses/Problem' } }
-  /creators/{id}/connections/instagram/invitation:
-    get:
-      summary: Get the active delegated Instagram connection invitation
-      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
-      responses: { '200': { description: Active invitation metadata or null } }
-  /creators/{id}/connections/instagram/invitations:
-    post:
-      summary: Create a one-time Instagram connection link for a creator
-      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
-      responses: { '201': { description: Invitation and public connection URL }, '404': { $ref: '#/components/responses/Problem' }, '503': { $ref: '#/components/responses/Problem' } }
-  /creators/{id}/connections/instagram/invitations/{invitationId}:
-    delete:
-      summary: Revoke an active delegated Instagram connection invitation
-      parameters:
-        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
-        - { name: invitationId, in: path, required: true, schema: { type: string, format: uuid } }
-      responses: { '204': { description: Invitation revoked }, '404': { $ref: '#/components/responses/Problem' } }
-  /oauth/connection-invitations/instagram/{token}:
-    get:
-      summary: Validate a public delegated Instagram connection invitation
-      parameters: [{ name: token, in: path, required: true, schema: { type: string } }]
-      responses: { '200': { description: Public invitation details }, '404': { $ref: '#/components/responses/Problem' } }
-  /oauth/connection-invitations/instagram/{token}/authorize:
-    get:
-      summary: Start Instagram OAuth from a delegated connection invitation
-      parameters: [{ name: token, in: path, required: true, schema: { type: string } }]
-      responses: { '302': { description: Redirect to Instagram authorization } }
   /oauth/{platform}/callback:
     get:
       summary: Platform OAuth callback

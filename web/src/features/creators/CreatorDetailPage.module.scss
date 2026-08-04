@@ -465,32 +465,6 @@ button:disabled {
   opacity: 0.45;
   cursor: not-allowed;
 }
-.invitationStatus {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-  margin-top: 0.8rem;
-  padding: 0.75rem 0.85rem;
-  background: rgb(156 229 189 / 7%);
-  border: 1px solid rgb(156 229 189 / 17%);
-  border-radius: 0.7rem;
-}
-.invitationStatus > div {
-  display: grid;
-  gap: 0.18rem;
-}
-.invitationStatus b { color: #bcefd0; font-size: 0.86rem; }
-.invitationStatus span { color: var(--muted); font-size: 0.78rem; }
-.invitationStatus button {
-  flex: none;
-  padding: 0.45rem 0.65rem;
-  color: #ffb0a5;
-  background: transparent;
-  border: 1px solid rgb(255 155 143 / 28%);
-  border-radius: 0.45rem;
-  cursor: pointer;
-}
 .connectionList {
   display: grid;
   gap: 0.7rem;
@@ -549,61 +523,6 @@ button:disabled {
   border: 1px solid rgb(255 143 128 / 28%);
   border-radius: 1rem;
   box-shadow: 0 24px 70px rgb(0 0 0 / 52%);
-}
-.shareDialog {
-  width: min(36rem, 100%);
-  padding: 1.25rem;
-  color: var(--text);
-  background: linear-gradient(145deg, #303534, #202322);
-  border: 1px solid rgb(156 229 189 / 28%);
-  border-radius: 1rem;
-  box-shadow: 0 24px 70px rgb(0 0 0 / 52%);
-}
-.shareDialog > div:first-child {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-}
-.shareDialog h3,
-.shareDialog p { margin: 0; }
-.shareDialog > div:first-child p,
-.shareDialog > p,
-.shareDialog small { color: var(--muted); }
-.shareDialog > p { margin-top: 1rem; line-height: 1.55; }
-.shareDialog small { display: block; margin-top: 0.65rem; font-size: 0.78rem; line-height: 1.45; }
-.shareMark {
-  display: grid;
-  flex: none;
-  width: 2.4rem;
-  height: 2.4rem;
-  place-items: center;
-  color: #1d2b23;
-  background: #bcefd0;
-  border-radius: 50%;
-  font-weight: 850;
-}
-.shareField {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 0.5rem;
-  margin-top: 1rem;
-}
-.shareField input {
-  min-width: 0;
-  padding: 0.65rem 0.7rem;
-  color: var(--text);
-  background: #181a1a;
-  border: 1px solid var(--border);
-  border-radius: 0.5rem;
-}
-.shareField button {
-  padding: 0.65rem 0.8rem;
-  color: #183126;
-  background: #bcefd0;
-  border: 0;
-  border-radius: 0.5rem;
-  cursor: pointer;
-  font-weight: 750;
 }
 .confirmDialog > div:first-child {
   display: flex;
@@ -866,13 +785,6 @@ button:disabled {
   }
   .platformCard {
     align-items: flex-start;
-  }
-  .invitationStatus {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-  .shareField {
-    grid-template-columns: 1fr;
   }
   .connectionActions {
     flex-wrap: wrap;
