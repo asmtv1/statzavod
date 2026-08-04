@@ -146,6 +146,7 @@ func (s *Server) oauthAuthorize(w http.ResponseWriter, r *http.Request) {
 		}
 	case "VK":
 		q.Set("display", "page")
+		q.Set("scope", strings.Join(provider.Scopes, ","))
 		q.Set("v", s.config.VKAPIVersion)
 	}
 	if provider.UsePKCE {

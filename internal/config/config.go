@@ -51,7 +51,7 @@ func Load() (Config, error) {
 		VKClientID:        os.Getenv("VK_OAUTH_CLIENT_ID"),
 		VKClientSecret:    os.Getenv("VK_OAUTH_CLIENT_SECRET"),
 		VKRedirectURL:     value("VK_OAUTH_REDIRECT_URL", "http://localhost:8080/api/v1/oauth/vk/callback"),
-		VKOAuthBase:       value("VK_OAUTH_BASE", "https://oauth.vk.ru"),
+		VKOAuthBase:       value("VK_OAUTH_BASE", "https://oauth.vk.com"),
 		VKAPIBase:         value("VK_API_BASE", "https://api.vk.ru"),
 		VKAPIVersion:      value("VK_API_VERSION", "5.199"),
 		SMTPURL:           os.Getenv("SMTP_URL"),
