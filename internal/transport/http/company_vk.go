@@ -16,7 +16,7 @@ func (s *Server) listCompanyVKAccounts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := r.Context().Value(principalKey).(principal)
-	rows, err := s.pool.Query(r.Context(), `SELECT a.id,a.company_id,c.name,a.login_ciphertext,a.login_nonce,a.phone_ciphertext,a.phone_nonce,a.updated_at,COALESCE(p.display_name,''),COALESCE(o.status,'') FROM company_vk_accounts a JOIN companies c ON c.id=a.company_id LEFT JOIN platform_accounts p ON p.id=a.platform_account_id LEFT JOIN oauth_connections o ON o.platform_account_id=p.id WHERE a.organization_id=$1 AND c.archived_at IS NULL ORDER BY c.name`, p.OrganizationID)
+	rows, err := s.pool.Query(r.Context(), `SELECT a.id,a.company_id,c.name,a.login_ciphertext,a.login_nonce,a.phone_ciphertext,a.phone_nonce,a.updated_at,COALESCE(p.display_name,''),COALESCE(o.status,''),COALESCE(p.id::text,''),p.last_synced_at,t.last_success_at,COALESCE(t.last_error,p.last_error,''),COALESCE(t.consecutive_failures,0),(SELECT count(*) FROM creator_vk_assignments v WHERE v.company_vk_account_id=a.id) FROM company_vk_accounts a JOIN companies c ON c.id=a.company_id LEFT JOIN platform_accounts p ON p.id=a.platform_account_id LEFT JOIN oauth_connections o ON o.platform_account_id=p.id LEFT JOIN LATERAL (SELECT last_success_at,last_error,consecutive_failures FROM sync_targets WHERE target_id=p.id AND operation='VK_IMPORT' ORDER BY created_at DESC LIMIT 1) t ON true WHERE a.organization_id=$1 AND c.archived_at IS NULL ORDER BY c.name`, p.OrganizationID)
 	if err != nil {
 		problem(w, http.StatusInternalServerError, "VK accounts failed", "could not load company VK accounts")
 		return
@@ -24,10 +24,11 @@ func (s *Server) listCompanyVKAccounts(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 	items := make([]map[string]any, 0)
 	for rows.Next() {
-		var id, companyID, companyName, oauthDisplayName, oauthStatus string
+		var id, companyID, companyName, oauthDisplayName, oauthStatus, platformAccountID, syncError string
 		var loginCiphertext, loginNonce, phoneCiphertext, phoneNonce []byte
-		var updatedAt any
-		if err := rows.Scan(&id, &companyID, &companyName, &loginCiphertext, &loginNonce, &phoneCiphertext, &phoneNonce, &updatedAt, &oauthDisplayName, &oauthStatus); err != nil {
+		var updatedAt, lastSyncedAt, lastSuccessAt any
+		var consecutiveFailures, communityCount int
+		if err := rows.Scan(&id, &companyID, &companyName, &loginCiphertext, &loginNonce, &phoneCiphertext, &phoneNonce, &updatedAt, &oauthDisplayName, &oauthStatus, &platformAccountID, &lastSyncedAt, &lastSuccessAt, &syncError, &consecutiveFailures, &communityCount); err != nil {
 			problem(w, http.StatusInternalServerError, "VK accounts failed", "could not read company VK account")
 			return
 		}
@@ -53,7 +54,7 @@ func (s *Server) listCompanyVKAccounts(w http.ResponseWriter, r *http.Request) {
 		if login != "" {
 			accessMethod = "LOGIN"
 		}
-		items = append(items, map[string]any{"id": id, "companyId": companyID, "companyName": companyName, "login": login, "phone": phone, "hasPassword": login != "", "accessMethod": accessMethod, "updatedAt": updatedAt, "oauthDisplayName": oauthDisplayName, "oauthStatus": oauthStatus})
+		items = append(items, map[string]any{"id": id, "companyId": companyID, "companyName": companyName, "login": login, "phone": phone, "hasPassword": login != "", "accessMethod": accessMethod, "updatedAt": updatedAt, "oauthDisplayName": oauthDisplayName, "oauthStatus": oauthStatus, "platformAccountId": platformAccountID, "lastSyncedAt": lastSyncedAt, "lastSuccessAt": lastSuccessAt, "syncError": syncError, "consecutiveFailures": consecutiveFailures, "communityCount": communityCount})
 	}
 	if err := rows.Err(); err != nil {
 		problem(w, http.StatusInternalServerError, "VK accounts failed", "could not finish reading company VK accounts")

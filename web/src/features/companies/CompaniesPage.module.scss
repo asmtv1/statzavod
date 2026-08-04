@@ -38,6 +38,9 @@
 .vkDialog { width: min(100%,36rem); }
 .oauthBox { display: grid; gap: .65rem; margin-top: 1rem; padding: .9rem; background: rgb(76 139 245 / 9%); border: 1px solid rgb(76 139 245 / 25%); border-radius: .65rem; }
 .oauthBox button { justify-self: start; padding: .58rem .75rem; color: #dce9ff; background: #386fc9; border-radius: .48rem; font-weight: 700; }
+.oauthActions { display: flex; flex-wrap: wrap; gap: .6rem; }
+.syncError { color: #ff9b8f; }
+.syncSuccess { color: #bcefd0; }
 .oauthBox .error { padding: .65rem; }
 .oauthHint { padding: .75rem; border: 1px solid var(--border); border-radius: .6rem; }
 .accessMethod { display: flex; flex-wrap: wrap; gap: .6rem; margin: 1.1rem 0 0; padding: 0; border: 0; }
