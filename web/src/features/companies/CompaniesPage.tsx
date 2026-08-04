@@ -257,6 +257,9 @@ export function CompaniesPage() {
               раз через VK ID — статистика будет собираться из сообществ,
               указанных в карточках креаторов.
             </p>
+            {vkAccounts.isError ? (
+              <p className={styles.error}>{vkAccounts.error.message}</p>
+            ) : null}
             {(() => {
               const account = vkAccounts.data?.items.find(
                 (item) => item.companyId === vkCompany.id,
