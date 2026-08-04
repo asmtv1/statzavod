@@ -9,7 +9,6 @@ const platformOptions: { id: Platform; name: string; hint: string }[] = [
   { id: 'YOUTUBE', name: 'YouTube', hint: 'Канал и YouTube Analytics' },
   { id: 'INSTAGRAM', name: 'Instagram', hint: 'Профиль, Reels и Insights' },
   { id: 'TIKTOK', name: 'TikTok', hint: 'Профиль и опубликованные видео' },
-  { id: 'VK', name: 'VK', hint: 'Профиль, видео и клипы' },
 ]
 
 type CredentialField = { key: string; label: string; secret?: boolean; channelLink?: boolean }

@@ -71,14 +71,16 @@ func (s *Server) claimPlatformSync(ctx context.Context) (platformSyncJob, bool, 
 	defer tx.Rollback(ctx)
 	var job platformSyncJob
 	err = tx.QueryRow(ctx, `
-		SELECT t.id,t.target_id,t.organization_id,x.creator_id,a.platform,a.external_id
+		SELECT t.id,t.target_id,t.organization_id,COALESCE(x.creator_id::text,''),a.platform,a.external_id
 		FROM sync_targets t
 		JOIN platform_accounts a ON a.id=t.target_id AND a.organization_id=t.organization_id
-		JOIN creator_account_assignments x ON x.platform_account_id=a.id AND x.valid_to IS NULL
+		LEFT JOIN creator_account_assignments x ON x.platform_account_id=a.id AND x.valid_to IS NULL
+		LEFT JOIN company_vk_accounts v ON v.platform_account_id=a.id
 		WHERE t.target_type='PLATFORM_ACCOUNT'
 		  AND t.status='ACTIVE'
 		  AND t.next_sync_at<=now()
 		  AND a.status='ACTIVE'
+		  AND (x.creator_id IS NOT NULL OR (a.platform='VK' AND v.id IS NOT NULL))
 		ORDER BY t.next_sync_at
 		FOR UPDATE OF t SKIP LOCKED
 		LIMIT 1
@@ -125,7 +127,7 @@ func (s *Server) syncPlatformAccount(ctx context.Context, job platformSyncJob) (
 		}
 		return result, nil
 	case "VK":
-		return syncResult{}, &providerError{Platform: "VK", Kind: providerPermanent, Message: "automatic VK import is not implemented"}
+		return s.syncVKCommunities(ctx, job, accessToken)
 	default:
 		return syncResult{}, fmt.Errorf("unsupported platform %s", job.Platform)
 	}
@@ -249,6 +251,16 @@ func (s *Server) accessTokenForSync(ctx context.Context, job platformSyncJob) (s
 		var token tiktokTokenData
 		token, err = s.refreshTikTokToken(ctx, string(refreshPlain))
 		refreshed = oauthToken{AccessToken: token.AccessToken, RefreshToken: token.RefreshToken, ExpiresIn: token.ExpiresIn, Scopes: splitScopes(token.Scope, nil)}
+	case "VK":
+		if len(refreshCipher) == 0 || len(refreshNonce) == 0 {
+			return "", &providerError{Platform: "VK", Kind: providerAuth, Message: "refresh token is missing"}
+		}
+		refreshPlain, decryptErr := s.envelope.Decrypt(refreshCipher, refreshNonce)
+		if decryptErr != nil {
+			return "", decryptErr
+		}
+		deviceID, _ := metadata["deviceId"].(string)
+		refreshed, err = s.refreshVKAccessToken(ctx, string(refreshPlain), deviceID)
 	default:
 		return "", &providerError{Platform: job.Platform, Kind: providerAuth, Message: "authorization expired"}
 	}

@@ -3,7 +3,7 @@ export type Summary = { kpis: Kpi[]; freshness: { status: string; message: strin
 export type CreatorStatus = 'ACTIVE'|'ON_LEAVE'|'DISMISSED'|'ARCHIVED'
 export type CreatorWorkStatus = 'OK'|'NEEDS_ATTENTION'|'IN_PROGRESS'
 export type Company = { id:string; name:string; creatorCount:number; hasVkAccount:boolean }
-export type CompanyVkAccount = { id:string; companyId:string; companyName:string; login:string; phone:string; hasPassword:boolean; accessMethod:'LOGIN'|'PHONE'; updatedAt:string }
+export type CompanyVkAccount = { id:string; companyId:string; companyName:string; login:string; phone:string; hasPassword:boolean; accessMethod:'LOGIN'|'PHONE'; updatedAt:string; oauthDisplayName:string; oauthStatus:string }
 export type CreatorVkAccess = { accountId:string; companyId:string; companyName:string; login:string; phone:string; hasPassword:boolean; accessMethod:'LOGIN'|'PHONE'|''; communityUrl:string; recipientAccountUrl:string }
 export type Creator = { id:string; firstName:string; lastName:string; middleName:string; displayName:string; status:CreatorStatus; createdAt:string; archivedAt:string|null; telegramUsername:string; companyId:string; companyName:string; workStatus:CreatorWorkStatus; workComment:string }
 export type Timeseries = { items: { date:string; views:number }[] }
@@ -51,6 +51,7 @@ export const api = {
   archiveCompany:(id:string)=>request<void>(`/companies/${id}`,{method:'DELETE'}),
   companyVkAccounts:()=>request<{items:CompanyVkAccount[]}>('/company-vk-accounts'),
   saveCompanyVkAccount:(companyId:string,payload:{accessMethod:'LOGIN'|'PHONE';login:string;password:string;phone:string})=>request<{id:string}>(`/companies/${companyId}/vk-account`,{method:'PUT',body:JSON.stringify(payload)}),
+  startCompanyVkAuthorization:(companyId:string)=>request<{authorizationUrl:string;expiresAt:string}>(`/companies/${companyId}/vk-account/authorize`,{method:'POST'}),
   revealCompanyVkPassword:(accountId:string)=>request<{value:string}>(`/company-vk-accounts/${accountId}/password/reveal`,{method:'POST'}),
   creators:()=>request<{items:Creator[]}>('/creators'),
   archivedCreators:()=>request<{items:Creator[]}>('/creators?scope=archived'),

@@ -61,6 +61,11 @@ paths:
       parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
       requestBody: { required: true, content: { application/json: { schema: { type: object, required: [accessMethod], properties: { accessMethod: { type: string, enum: [LOGIN, PHONE] }, login: { type: string }, password: { type: string, format: password }, phone: { type: string } } } } } }
       responses: { '200': { description: Saved }, '400': { $ref: '#/components/responses/Problem' }, '404': { $ref: '#/components/responses/Problem' } }
+  /companies/{id}/vk-account/authorize:
+    post:
+      summary: Connect the company's shared VK account through VK ID
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses: { '200': { description: VK ID authorization URL }, '400': { $ref: '#/components/responses/Problem' } }
   /company-vk-accounts/{id}/password/reveal:
     post:
       summary: Reveal a shared company VK password (admin only)

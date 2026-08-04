@@ -96,6 +96,10 @@ func (s *Server) oauthAuthorize(w http.ResponseWriter, r *http.Request) {
 	}
 	p := r.Context().Value(principalKey).(principal)
 	creatorID := chi.URLParam(r, "id")
+	if provider.ID == "VK" {
+		problem(w, http.StatusBadRequest, "VK is connected at company level", "connect the shared VK account from the company page")
+		return
+	}
 	var exists bool
 	if err := s.pool.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM creators WHERE id=$1 AND organization_id=$2 AND status='ACTIVE' AND archived_at IS NULL)`, creatorID, p.OrganizationID).Scan(&exists); err != nil || !exists {
 		problem(w, http.StatusNotFound, "creator not found", "creator does not exist in this organization")
@@ -154,6 +158,47 @@ func (s *Server) oauthAuthorize(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"authorizationUrl": provider.AuthorizeURL + "?" + q.Encode(), "expiresAt": time.Now().Add(10 * time.Minute)})
 }
 
+func (s *Server) companyVKOAuthAuthorize(w http.ResponseWriter, r *http.Request) {
+	provider := s.oauthProviders()["vk"]
+	if s.envelope == nil || provider.ClientID == "" || provider.ClientSecret == "" || provider.RedirectURL == "" {
+		problem(w, http.StatusServiceUnavailable, "VK is not configured", "server OAuth credentials are missing")
+		return
+	}
+	p := r.Context().Value(principalKey).(principal)
+	companyID := chi.URLParam(r, "id")
+	var companyVKAccountID string
+	if err := s.pool.QueryRow(r.Context(), `SELECT a.id FROM company_vk_accounts a JOIN companies c ON c.id=a.company_id WHERE a.company_id=$1 AND a.organization_id=$2 AND c.archived_at IS NULL`, companyID, p.OrganizationID).Scan(&companyVKAccountID); err != nil {
+		problem(w, http.StatusBadRequest, "shared VK account is missing", "save the company VK account before connecting VK ID")
+		return
+	}
+	state, verifier, challenge, err := platforms.NewPKCE()
+	if err != nil {
+		problem(w, http.StatusInternalServerError, "OAuth state creation failed", "could not create a secure authorization state")
+		return
+	}
+	encryptedVerifier, nonce, err := s.envelope.Encrypt([]byte(verifier))
+	if err != nil {
+		problem(w, http.StatusInternalServerError, "OAuth state creation failed", "could not protect the authorization state")
+		return
+	}
+	hash := sha256.Sum256([]byte(state))
+	_, err = s.pool.Exec(r.Context(), `INSERT INTO oauth_states(organization_id,creator_id,company_vk_account_id,platform,state_hash,pkce_verifier_ciphertext,nonce,expires_at,initiated_by) VALUES($1,NULL,$2,'VK',$3,$4,$5,now()+interval '10 minutes',$6)`, p.OrganizationID, companyVKAccountID, hash[:], encryptedVerifier, nonce, p.ID)
+	if err != nil {
+		problem(w, http.StatusInternalServerError, "OAuth state creation failed", "could not start VK authorization")
+		return
+	}
+	q := url.Values{
+		"client_id":             {provider.ClientID},
+		"redirect_uri":          {provider.RedirectURL},
+		"response_type":         {"code"},
+		"scope":                 {strings.Join(provider.Scopes, " ")},
+		"state":                 {state},
+		"code_challenge":        {challenge},
+		"code_challenge_method": {"S256"},
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"authorizationUrl": provider.AuthorizeURL + "?" + q.Encode(), "expiresAt": time.Now().Add(10 * time.Minute)})
+}
+
 func (s *Server) oauthCallback(w http.ResponseWriter, r *http.Request) {
 	platformKey := strings.ToLower(chi.URLParam(r, "platform"))
 	provider, ok := s.oauthProviders()[platformKey]
@@ -167,15 +212,24 @@ func (s *Server) oauthCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	hash := sha256.Sum256([]byte(state))
-	var organizationID, creatorID string
+	var organizationID string
+	var creatorID, companyVKAccountID *string
 	var encryptedVerifier, nonce []byte
-	err := s.pool.QueryRow(r.Context(), `UPDATE oauth_states SET consumed_at=now() WHERE state_hash=$1 AND platform=$2 AND consumed_at IS NULL AND expires_at>now() RETURNING organization_id,creator_id,pkce_verifier_ciphertext,nonce`, hash[:], provider.ID).Scan(&organizationID, &creatorID, &encryptedVerifier, &nonce)
+	err := s.pool.QueryRow(r.Context(), `UPDATE oauth_states SET consumed_at=now() WHERE state_hash=$1 AND platform=$2 AND consumed_at IS NULL AND expires_at>now() RETURNING organization_id,creator_id,company_vk_account_id,pkce_verifier_ciphertext,nonce`, hash[:], provider.ID).Scan(&organizationID, &creatorID, &companyVKAccountID, &encryptedVerifier, &nonce)
 	if err != nil {
 		s.redirectToApp(w, r, "/login?oauth="+platformKey+"-expired")
 		return
 	}
 	redirect := func(result string) {
-		s.redirectToApp(w, r, "/app/creators/"+creatorID+"?platform="+url.QueryEscape(platformKey)+"&oauth="+url.QueryEscape(result))
+		if companyVKAccountID != nil {
+			s.redirectToApp(w, r, "/app/companies?platform=vk&oauth="+url.QueryEscape(result))
+			return
+		}
+		if creatorID == nil {
+			s.redirectToApp(w, r, "/app/companies?platform=vk&oauth=state-error")
+			return
+		}
+		s.redirectToApp(w, r, "/app/creators/"+*creatorID+"?platform="+url.QueryEscape(platformKey)+"&oauth="+url.QueryEscape(result))
 	}
 	if r.URL.Query().Get("error") != "" {
 		redirect("denied")
@@ -199,11 +253,18 @@ func (s *Server) oauthCallback(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		// Keep provider details out of the browser, but retain them in the server
 		// log so an OAuth failure can be diagnosed without replaying a one-time code.
-		log.Printf("%s OAuth completion failed for creator %s: %v", provider.Name, creatorID, err)
+		log.Printf("%s OAuth completion failed: %v", provider.Name, err)
 		redirect("provider-error")
 		return
 	}
-	if err = s.savePlatformConnection(r.Context(), organizationID, creatorID, provider, token, profile); err != nil {
+	if companyVKAccountID != nil {
+		err = s.saveCompanyVKConnection(r.Context(), organizationID, *companyVKAccountID, provider, token, profile)
+	} else if creatorID != nil {
+		err = s.savePlatformConnection(r.Context(), organizationID, *creatorID, provider, token, profile)
+	} else {
+		err = fmt.Errorf("OAuth state has no owner")
+	}
+	if err != nil {
 		redirect("save-error")
 		return
 	}
@@ -478,7 +539,54 @@ func (s *Server) completeVKOAuth(ctx context.Context, provider oauthProvider, co
 		username = "id" + strconv.FormatInt(user.ID, 10)
 	}
 	return oauthToken{AccessToken: raw.AccessToken, RefreshToken: raw.RefreshToken, Scopes: provider.Scopes, ExpiresIn: raw.ExpiresIn},
-		platformProfile{ExternalID: strconv.FormatInt(user.ID, 10), Username: username, DisplayName: strings.TrimSpace(user.FirstName + " " + user.LastName), ProfileURL: "https://vk.ru/" + username, AvatarURL: user.Photo, AccountType: "CREATOR"}, nil
+		platformProfile{ExternalID: strconv.FormatInt(user.ID, 10), Username: username, DisplayName: strings.TrimSpace(user.FirstName + " " + user.LastName), ProfileURL: "https://vk.ru/" + username, AvatarURL: user.Photo, AccountType: "COMPANY_OPERATOR", Metadata: map[string]any{"deviceId": deviceID}}, nil
+}
+
+func (s *Server) saveCompanyVKConnection(ctx context.Context, organizationID, companyVKAccountID string, provider oauthProvider, token oauthToken, profile platformProfile) error {
+	if profile.ExternalID == "" || token.AccessToken == "" || s.envelope == nil {
+		return fmt.Errorf("incomplete VK connection")
+	}
+	access, accessNonce, err := s.envelope.Encrypt([]byte(token.AccessToken))
+	if err != nil {
+		return err
+	}
+	var refresh, refreshNonce []byte
+	if token.RefreshToken != "" {
+		refresh, refreshNonce, err = s.envelope.Encrypt([]byte(token.RefreshToken))
+		if err != nil {
+			return err
+		}
+	}
+	metadata, _ := json.Marshal(profile.Metadata)
+	if len(metadata) == 0 || string(metadata) == "null" {
+		metadata = []byte("{}")
+	}
+	var expiresAt *time.Time
+	if token.ExpiresIn > 0 {
+		value := time.Now().Add(time.Duration(token.ExpiresIn) * time.Second)
+		expiresAt = &value
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var accountID string
+	err = tx.QueryRow(ctx, `INSERT INTO platform_accounts(organization_id,platform,external_id,username,display_name,profile_url,avatar_url,account_type,status,metadata,last_synced_at) VALUES($1,'VK',$2,$3,$4,$5,$6,'COMPANY_OPERATOR','ACTIVE',$7::jsonb,NULL) ON CONFLICT(organization_id,platform,external_id) DO UPDATE SET username=excluded.username,display_name=excluded.display_name,profile_url=excluded.profile_url,avatar_url=excluded.avatar_url,account_type=excluded.account_type,status='ACTIVE',metadata=excluded.metadata,last_error=NULL,updated_at=now() RETURNING id`, organizationID, profile.ExternalID, profile.Username, profile.DisplayName, profile.ProfileURL, profile.AvatarURL, string(metadata)).Scan(&accountID)
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx, `INSERT INTO oauth_connections(organization_id,platform_account_id,access_token_ciphertext,refresh_token_ciphertext,nonce,access_token_nonce,refresh_token_nonce,scopes,expires_at,last_refreshed_at,status) VALUES($1,$2,$3,$4,$5,$5,$6,$7,$8,now(),'ACTIVE') ON CONFLICT(platform_account_id) DO UPDATE SET access_token_ciphertext=excluded.access_token_ciphertext,refresh_token_ciphertext=excluded.refresh_token_ciphertext,nonce=excluded.nonce,access_token_nonce=excluded.access_token_nonce,refresh_token_nonce=excluded.refresh_token_nonce,scopes=excluded.scopes,expires_at=excluded.expires_at,last_refreshed_at=now(),status='ACTIVE',disconnect_requested_at=NULL,purge_after=NULL,updated_at=now()`, organizationID, accountID, access, refresh, accessNonce, refreshNonce, token.Scopes, expiresAt)
+	if err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `UPDATE company_vk_accounts SET platform_account_id=$2,updated_at=now() WHERE id=$1 AND organization_id=$3`, companyVKAccountID, accountID, organizationID); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `INSERT INTO sync_targets(organization_id,target_type,target_id,operation,cadence,next_sync_at,status) VALUES($1,'PLATFORM_ACCOUNT',$2,'VK_IMPORT',interval '6 hours',now(),'ACTIVE') ON CONFLICT(organization_id,target_id,operation) WHERE status='ACTIVE' DO UPDATE SET next_sync_at=now(),status='ACTIVE',last_error=NULL`, organizationID, accountID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func (s *Server) savePlatformConnection(ctx context.Context, organizationID, creatorID string, provider oauthProvider, token oauthToken, profile platformProfile) error {

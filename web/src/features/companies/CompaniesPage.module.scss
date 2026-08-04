@@ -22,8 +22,9 @@
 .actions .vkSetup,.actions .vkReady { padding: .5rem .7rem; border-radius: .5rem; font-size: .76rem; font-weight: 700; white-space: nowrap; }
 .actions .vkSetup { color: #e8c879; background: rgb(229 184 106/.09); border: 1px solid rgb(229 184 106/.22); }
 .actions .vkReady { color: #bcefd0; background: rgb(156 229 189/.11); border: 1px solid rgb(156 229 189/.2); }
-.state,.error { padding: 1.25rem; background: #202222; border: 1px solid var(--border); border-radius: 1rem; }
+.state,.error,.success { padding: 1.25rem; background: #202222; border: 1px solid var(--border); border-radius: 1rem; }
 .error { color: #ff9b8f; }
+.success { color: #bcefd0; }
 .backdrop { position: fixed; inset: 0; z-index: 10; display: grid; place-items: center; padding: 1rem; background: rgb(6 7 7/.7); backdrop-filter: blur(8px); }
 .dialog { width: min(100%,30rem); padding: 1.35rem; background: linear-gradient(145deg,#313434,#202222); border: 1px solid var(--border); border-radius: 1rem; box-shadow: 0 25px 60px rgb(0 0 0/.5); }
 .dialog h2 { margin-top: 0; }
@@ -35,6 +36,10 @@
 .dialogHead h2 { margin: .18rem 0 0; }
 .dialogHead > button { font-size: 1.65rem; line-height: 1; }
 .vkDialog { width: min(100%,36rem); }
+.oauthBox { display: grid; gap: .65rem; margin-top: 1rem; padding: .9rem; background: rgb(76 139 245 / 9%); border: 1px solid rgb(76 139 245 / 25%); border-radius: .65rem; }
+.oauthBox button { justify-self: start; padding: .58rem .75rem; color: #dce9ff; background: #386fc9; border-radius: .48rem; font-weight: 700; }
+.oauthBox .error { padding: .65rem; }
+.oauthHint { padding: .75rem; border: 1px solid var(--border); border-radius: .6rem; }
 .accessMethod { display: flex; flex-wrap: wrap; gap: .6rem; margin: 1.1rem 0 0; padding: 0; border: 0; }
 .accessMethod legend { width: 100%; margin-bottom: .05rem; font-size: .8rem; font-weight: 650; }
 .accessMethod label { display: inline-flex; align-items: center; gap: .42rem; padding: .52rem .68rem; color: var(--muted); background: #191b1b; border: 1px solid var(--border); border-radius: .5rem; font-size: .78rem; cursor: pointer; }
