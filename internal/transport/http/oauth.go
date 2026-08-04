@@ -167,8 +167,8 @@ func (s *Server) companyVKOAuthAuthorize(w http.ResponseWriter, r *http.Request)
 	p := r.Context().Value(principalKey).(principal)
 	companyID := chi.URLParam(r, "id")
 	var companyVKAccountID string
-	if err := s.pool.QueryRow(r.Context(), `SELECT a.id FROM company_vk_accounts a JOIN companies c ON c.id=a.company_id WHERE a.company_id=$1 AND a.organization_id=$2 AND c.archived_at IS NULL`, companyID, p.OrganizationID).Scan(&companyVKAccountID); err != nil {
-		problem(w, http.StatusBadRequest, "shared VK account is missing", "save the company VK account before connecting VK ID")
+	if err := s.pool.QueryRow(r.Context(), `INSERT INTO company_vk_accounts(organization_id,company_id,created_by,updated_by) SELECT $2,c.id,$3,$3 FROM companies c WHERE c.id=$1 AND c.organization_id=$2 AND c.archived_at IS NULL ON CONFLICT(company_id) DO UPDATE SET updated_by=excluded.updated_by,updated_at=now() RETURNING id`, companyID, p.OrganizationID, p.ID).Scan(&companyVKAccountID); err != nil {
+		problem(w, http.StatusBadRequest, "company is unavailable", "could not prepare the shared VK account")
 		return
 	}
 	state, verifier, challenge, err := platforms.NewPKCE()
