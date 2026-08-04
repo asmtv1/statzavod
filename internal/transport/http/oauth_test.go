@@ -81,8 +81,15 @@ func TestCompleteInstagramOAuth(t *testing.T) {
 
 func TestCompleteVKOAuth(t *testing.T) {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/access_token", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]any{"access_token": "access", "expires_in": 0, "user_id": 7})
+	mux.HandleFunc("/oauth2/auth", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Query().Get("code_verifier") != "verifier" || r.URL.Query().Get("state") != "state" || r.URL.Query().Get("device_id") != "device" {
+			t.Fatal("VK ID token request did not include PKCE verifier and device ID")
+		}
+		_ = r.ParseForm()
+		if r.Form.Get("code") != "code" {
+			t.Fatal("VK ID token request did not include code")
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"access_token": "access", "refresh_token": "refresh", "expires_in": 3600})
 	})
 	mux.HandleFunc("/method/users.get", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{
@@ -95,11 +102,11 @@ func TestCompleteVKOAuth(t *testing.T) {
 	defer server.Close()
 	s := &Server{config: config.Config{VKOAuthBase: server.URL, VKAPIBase: server.URL, VKAPIVersion: "5.199"}}
 	provider := oauthProvider{ID: "VK", ClientID: "client", ClientSecret: "secret", RedirectURL: "https://app.test/callback", Scopes: []string{"video"}}
-	token, profile, err := s.completeVKOAuth(t.Context(), provider, "code")
+	token, profile, err := s.completeVKOAuth(t.Context(), provider, "code", "verifier", "state", "device")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if token.AccessToken != "access" || profile.ExternalID != "7" || profile.Username != "ivan" {
+	if token.AccessToken != "access" || token.RefreshToken != "refresh" || profile.ExternalID != "7" || profile.Username != "ivan" {
 		t.Fatalf("unexpected result: %#v %#v", token, profile)
 	}
 }

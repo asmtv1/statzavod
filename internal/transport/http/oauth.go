@@ -75,7 +75,7 @@ func (s *Server) oauthProviders() map[string]oauthProvider {
 		"vk": {
 			ID: "VK", Name: "VK", ClientID: s.config.VKClientID, ClientSecret: s.config.VKClientSecret,
 			RedirectURL: s.config.VKRedirectURL, AuthorizeURL: strings.TrimRight(s.config.VKOAuthBase, "/") + "/authorize",
-			Scopes: []string{"video", "stats", "offline"},
+			Scopes: []string{"video", "stats", "offline"}, UsePKCE: true,
 		},
 	}
 }
@@ -145,9 +145,7 @@ func (s *Server) oauthAuthorize(w http.ResponseWriter, r *http.Request) {
 			q.Set("scope", strings.Join(provider.Scopes, ","))
 		}
 	case "VK":
-		q.Set("display", "page")
-		q.Set("scope", strings.Join(provider.Scopes, ","))
-		q.Set("v", s.config.VKAPIVersion)
+		q.Set("scope", strings.Join(provider.Scopes, " "))
 	}
 	if provider.UsePKCE {
 		q.Set("code_challenge", challenge)
@@ -197,7 +195,7 @@ func (s *Server) oauthCallback(w http.ResponseWriter, r *http.Request) {
 		redirect("state-error")
 		return
 	}
-	token, profile, err := s.completeOAuth(r.Context(), provider, code, string(verifier))
+	token, profile, err := s.completeOAuth(r.Context(), provider, code, string(verifier), state, r.URL.Query().Get("device_id"))
 	if err != nil {
 		// Keep provider details out of the browser, but retain them in the server
 		// log so an OAuth failure can be diagnosed without replaying a one-time code.
@@ -216,7 +214,7 @@ func (s *Server) redirectToApp(w http.ResponseWriter, r *http.Request, path stri
 	http.Redirect(w, r, strings.TrimRight(s.config.PublicBaseURL, "/")+path, http.StatusFound)
 }
 
-func (s *Server) completeOAuth(ctx context.Context, provider oauthProvider, code, verifier string) (oauthToken, platformProfile, error) {
+func (s *Server) completeOAuth(ctx context.Context, provider oauthProvider, code, verifier, state, deviceID string) (oauthToken, platformProfile, error) {
 	switch provider.ID {
 	case "TIKTOK":
 		token, err := s.exchangeTikTokCode(ctx, code)
@@ -237,7 +235,7 @@ func (s *Server) completeOAuth(ctx context.Context, provider oauthProvider, code
 		}
 		return s.completeInstagramOAuth(ctx, provider, code)
 	case "VK":
-		return s.completeVKOAuth(ctx, provider, code)
+		return s.completeVKOAuth(ctx, provider, code, verifier, state, deviceID)
 	default:
 		return oauthToken{}, platformProfile{}, fmt.Errorf("unsupported OAuth provider")
 	}
@@ -441,14 +439,24 @@ func (s *Server) completeInstagramOAuth(ctx context.Context, provider oauthProvi
 		platformProfile{ExternalID: externalID, Username: user.Username, DisplayName: displayName, ProfileURL: "https://www.instagram.com/" + user.Username + "/", AvatarURL: user.ProfilePictureURL, AccountType: user.AccountType}, nil
 }
 
-func (s *Server) completeVKOAuth(ctx context.Context, provider oauthProvider, code string) (oauthToken, platformProfile, error) {
-	tokenURL := strings.TrimRight(s.config.VKOAuthBase, "/") + "/access_token?" + url.Values{"client_id": {provider.ClientID}, "client_secret": {provider.ClientSecret}, "redirect_uri": {provider.RedirectURL}, "code": {code}}.Encode()
-	var raw struct {
-		AccessToken string `json:"access_token"`
-		ExpiresIn   int64  `json:"expires_in"`
-		UserID      int64  `json:"user_id"`
+func (s *Server) completeVKOAuth(ctx context.Context, provider oauthProvider, code, verifier, state, deviceID string) (oauthToken, platformProfile, error) {
+	if deviceID == "" {
+		return oauthToken{}, platformProfile{}, fmt.Errorf("VK ID callback did not include a device ID")
 	}
-	if err := doJSON(ctx, http.MethodGet, tokenURL, "", &raw); err != nil || raw.AccessToken == "" || raw.UserID == 0 {
+	tokenURL := strings.TrimRight(s.config.VKOAuthBase, "/") + "/oauth2/auth?" + url.Values{
+		"grant_type": {"authorization_code"}, "redirect_uri": {provider.RedirectURL}, "client_id": {provider.ClientID}, "code_verifier": {verifier}, "state": {state}, "device_id": {deviceID},
+	}.Encode()
+	var raw struct {
+		AccessToken  string `json:"access_token"`
+		RefreshToken string `json:"refresh_token"`
+		ExpiresIn    int64  `json:"expires_in"`
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, tokenURL, strings.NewReader(url.Values{"code": {code}}.Encode()))
+	if err != nil {
+		return oauthToken{}, platformProfile{}, err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	if err := doRequestJSON(req, &raw); err != nil || raw.AccessToken == "" {
 		return oauthToken{}, platformProfile{}, fmt.Errorf("VK token exchange failed")
 	}
 	var users struct {
@@ -469,7 +477,7 @@ func (s *Server) completeVKOAuth(ctx context.Context, provider oauthProvider, co
 	if username == "" {
 		username = "id" + strconv.FormatInt(user.ID, 10)
 	}
-	return oauthToken{AccessToken: raw.AccessToken, Scopes: provider.Scopes, ExpiresIn: raw.ExpiresIn},
+	return oauthToken{AccessToken: raw.AccessToken, RefreshToken: raw.RefreshToken, Scopes: provider.Scopes, ExpiresIn: raw.ExpiresIn},
 		platformProfile{ExternalID: strconv.FormatInt(user.ID, 10), Username: username, DisplayName: strings.TrimSpace(user.FirstName + " " + user.LastName), ProfileURL: "https://vk.ru/" + username, AvatarURL: user.Photo, AccountType: "CREATOR"}, nil
 }
 
