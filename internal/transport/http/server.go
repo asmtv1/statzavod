@@ -203,7 +203,19 @@ func (s *Server) listCreators(w http.ResponseWriter, r *http.Request) {
 		problem(w, http.StatusBadRequest, "invalid scope", "scope must be active or archived")
 		return
 	}
-	rows, err := s.pool.Query(r.Context(), `SELECT c.id,c.first_name,c.last_name,COALESCE(c.middle_name,''),c.display_name,c.status,c.created_at,c.telegram_username,COALESCE(c.company_id::text,''),COALESCE(x.name,''),c.work_status,c.work_comment,c.archived_at FROM creators c LEFT JOIN companies x ON x.id=c.company_id WHERE c.organization_id=$1 AND `+archiveFilter+` ORDER BY CASE c.status WHEN 'ACTIVE' THEN 0 WHEN 'ON_LEAVE' THEN 1 ELSE 2 END,c.display_name`, p.OrganizationID)
+	rows, err := s.pool.Query(r.Context(), `SELECT c.id,c.first_name,c.last_name,COALESCE(c.middle_name,''),c.display_name,c.status,c.created_at,c.telegram_username,COALESCE(c.company_id::text,''),COALESCE(x.name,''),c.work_status,c.work_comment,c.archived_at,ARRAY(
+		SELECT connected.platform FROM (
+			SELECT a.platform::text AS platform
+			FROM creator_account_assignments assignment
+			JOIN platform_accounts a ON a.id=assignment.platform_account_id
+			WHERE assignment.creator_id=c.id AND assignment.valid_to IS NULL AND a.organization_id=c.organization_id AND a.status<>'DISCONNECTED'
+			UNION
+			SELECT 'VK' AS platform
+			FROM creator_vk_assignments vk
+			JOIN company_vk_accounts company_account ON company_account.id=vk.company_vk_account_id
+			WHERE vk.creator_id=c.id AND company_account.organization_id=c.organization_id
+		) connected ORDER BY connected.platform
+	) FROM creators c LEFT JOIN companies x ON x.id=c.company_id WHERE c.organization_id=$1 AND `+archiveFilter+` ORDER BY CASE c.status WHEN 'ACTIVE' THEN 0 WHEN 'ON_LEAVE' THEN 1 ELSE 2 END,c.display_name`, p.OrganizationID)
 	if err != nil {
 		problem(w, 500, "query failed", err.Error())
 		return
@@ -214,11 +226,12 @@ func (s *Server) listCreators(w http.ResponseWriter, r *http.Request) {
 		var id, first, last, middle, display, status, telegram, companyID, companyName, workStatus, workComment string
 		var created time.Time
 		var archivedAt *time.Time
-		if err := rows.Scan(&id, &first, &last, &middle, &display, &status, &created, &telegram, &companyID, &companyName, &workStatus, &workComment, &archivedAt); err != nil {
+		var connectedPlatforms []string
+		if err := rows.Scan(&id, &first, &last, &middle, &display, &status, &created, &telegram, &companyID, &companyName, &workStatus, &workComment, &archivedAt, &connectedPlatforms); err != nil {
 			problem(w, 500, "scan failed", err.Error())
 			return
 		}
-		items = append(items, map[string]any{"id": id, "firstName": first, "lastName": last, "middleName": middle, "displayName": display, "status": status, "createdAt": created, "archivedAt": archivedAt, "telegramUsername": telegram, "companyId": companyID, "companyName": companyName, "workStatus": workStatus, "workComment": workComment})
+		items = append(items, map[string]any{"id": id, "firstName": first, "lastName": last, "middleName": middle, "displayName": display, "status": status, "createdAt": created, "archivedAt": archivedAt, "telegramUsername": telegram, "companyId": companyID, "companyName": companyName, "workStatus": workStatus, "workComment": workComment, "connectedPlatforms": connectedPlatforms})
 	}
 	writeJSON(w, 200, map[string]any{"items": items})
 }
