@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { api, type CreatorAnalytics } from '../../shared/api/client'
-import { ComparisonChart } from './ComparisonChart'
+import { DailyPerformanceChart, PlatformBreakdownChart, type DailyAnalyticsPoint, type PlatformAnalyticsPoint } from './PerformanceCharts'
 import styles from './AnalyticsPage.module.scss'
 
 const today = new Date().toISOString().slice(0,10)
@@ -35,6 +35,38 @@ export function AnalyticsPage() {
     return Object.fromEntries(keys.map(key => [key,reports.reduce((sum,item) => sum + (item.kpis.find(kpi => kpi.key === key)?.value ?? 0),0)]))
   },[reports])
   const publications = useMemo(() => reports.flatMap(item => item.publications.map(publication => ({ ...publication, creatorName:item.creatorName }))).sort((a,b) => b.publishedAt.localeCompare(a.publishedAt)),[reports])
+  const dailyAnalytics = useMemo<DailyAnalyticsPoint[]>(() => {
+    if (!from || !to) return []
+    const byDate = new Map<string, DailyAnalyticsPoint>()
+    for (const publication of publications) {
+      const date = publication.publishedAt.slice(0, 10)
+      const point = byDate.get(date) ?? { date, views:0, likes:0, publications:0 }
+      point.views += publication.views
+      point.likes += publication.likes
+      point.publications += 1
+      byDate.set(date, point)
+    }
+    const points: DailyAnalyticsPoint[] = []
+    const cursor = new Date(`${from}T00:00:00`)
+    const end = new Date(`${to}T00:00:00`)
+    while (cursor <= end) {
+      const date = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, '0')}-${String(cursor.getDate()).padStart(2, '0')}`
+      points.push(byDate.get(date) ?? { date, views:0, likes:0, publications:0 })
+      cursor.setDate(cursor.getDate() + 1)
+    }
+    return points
+  }, [from, publications, to])
+  const platformAnalytics = useMemo<PlatformAnalyticsPoint[]>(() => {
+    const byPlatform = new Map<string, PlatformAnalyticsPoint>()
+    for (const publication of publications) {
+      const point = byPlatform.get(publication.platform) ?? { platform:publication.platform, views:0, likes:0, publications:0 }
+      point.views += publication.views
+      point.likes += publication.likes
+      point.publications += 1
+      byPlatform.set(publication.platform, point)
+    }
+    return [...byPlatform.values()].sort((a,b) => b.views - a.views)
+  }, [publications])
   const exportQuery = new URLSearchParams({ creatorIds:selected.join(','), activityFrom:from, activityTo:to })
 
   const toggle = (id:string) => setSelected(current => current.includes(id) ? current.filter(item => item !== id) : [...current,id])
@@ -70,13 +102,21 @@ export function AnalyticsPage() {
         {[['views','Просмотры'],['likes','Реакции'],['comments','Комментарии'],['shares','Репосты'],['publications','Публикации']].map(([key,label]) => <article key={key}><span>{label}</span><strong>{number.format(totals[key] ?? 0)}</strong></article>)}
       </div>
       <div className={styles.analyticsGrid}>
-        <section className={styles.chartPanel}><div><h2>Сравнение креаторов</h2><p>Просмотры и реакции за выбранный период.</p></div><ComparisonChart reports={reports}/></section>
-        <section className={styles.ranking}><div><h2>Эффективность</h2><p>Результаты по каждому креатору.</p></div>{reports.map(item => {
+        <section className={styles.chartPanel}><div className={styles.panelHead}><div><h2>Динамика по дням</h2><p>Результат публикаций по дате выхода.</p></div></div><DailyPerformanceChart data={dailyAnalytics}/></section>
+        <section className={styles.platformPanel}><div className={styles.panelHead}><div><h2>Платформы</h2><p>Вклад каждой площадки в результат.</p></div></div>{platformAnalytics.length ? <PlatformBreakdownChart data={platformAnalytics}/> : <div className={styles.chartEmpty}>За период публикаций нет</div>}</section>
+      </div>
+      <section className={styles.ranking}><div><h2>Итоги по креаторам</h2><p>Суммарный результат каждого креатора по всем платформам.</p></div><div className={styles.rankingGrid}>{reports.map(item => {
           const views = item.kpis.find(kpi => kpi.key === 'views')?.value ?? 0
           const likes = item.kpis.find(kpi => kpi.key === 'likes')?.value ?? 0
-          return <Link to={`/app/creators/${item.creatorId}`} key={item.creatorId}><span><b>{item.creatorName}</b><small>{number.format(views)} просмотров</small></span><strong>{views ? `${((likes/views)*100).toFixed(1)}% ER` : '—'}</strong></Link>
-        })}</section>
-      </div>
+          const itemPublications = item.kpis.find(kpi => kpi.key === 'publications')?.value ?? 0
+          return <Link to={`/app/creators/${item.creatorId}`} key={item.creatorId}>
+            <span><b>{item.creatorName}</b><small>Все платформы</small></span>
+            <span className={styles.creatorMetric}><b>{number.format(views)}</b><small>просмотров</small></span>
+            <span className={styles.creatorMetric}><b>{number.format(likes)}</b><small>реакций</small></span>
+            <span className={styles.creatorMetric}><b>{number.format(itemPublications)}</b><small>публикаций</small></span>
+            <strong>{views ? `${((likes/views)*100).toFixed(1)}% ER` : '—'}</strong>
+          </Link>
+        })}</div></section>
       <section className={styles.publications}><div><h2>Публикации</h2><p>Все ролики выбранных креаторов за период.</p></div>{publications.length ? <div className={styles.table}><div className={styles.tableHead}><span>Публикация</span><span>Креатор</span><span>Платформа</span><span>Просмотры</span><span>Реакции</span></div>{publications.map(item => <article key={item.id}><div><b>{item.title || 'Без названия'}</b><small>{new Date(item.publishedAt).toLocaleDateString('ru-RU')}</small></div><span>{item.creatorName}</span><span>{item.platform}</span><strong>{number.format(item.views)}</strong><strong>{number.format(item.likes)}</strong></article>)}</div> : <p className={styles.empty}>За выбранный период публикаций нет.</p>}</section>
     </>}
   </section>
