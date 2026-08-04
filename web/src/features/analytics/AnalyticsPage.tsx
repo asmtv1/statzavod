@@ -30,10 +30,6 @@ export function AnalyticsPage() {
   }, [creators.data])
 
   const reports = report.data ?? []
-  const totals = useMemo(() => {
-    const keys = ['views','likes','comments','shares','publications']
-    return Object.fromEntries(keys.map(key => [key,reports.reduce((sum,item) => sum + (item.kpis.find(kpi => kpi.key === key)?.value ?? 0),0)]))
-  },[reports])
   const publications = useMemo(() => reports.flatMap(item => item.publications.map(publication => ({ ...publication, creatorName:item.creatorName }))).sort((a,b) => b.publishedAt.localeCompare(a.publishedAt)),[reports])
   const dailyAnalytics = useMemo<DailyAnalyticsPoint[]>(() => {
     if (!from || !to) return []
@@ -98,25 +94,21 @@ export function AnalyticsPage() {
     {report.isError ? <div className={styles.error}>{report.error.message}</div> : null}
     {!report.data ? <section className={styles.startState}><h2>Отчёт ещё не собран</h2><p>Выберите период и сотрудников выше. Здесь появятся графики, ключевые показатели и таблица публикаций.</p></section> : <>
       <div className={styles.resultHead}><div><p>РЕЗУЛЬТАТ</p><h2>{reports.length === 1 ? reports[0].creatorName : `${reports.length} креаторов`}</h2></div><a href={`/api/v1/exports?${exportQuery.toString()}`}>Скачать Excel</a></div>
-      <div className={styles.kpis}>
-        {[['views','Просмотры'],['likes','Реакции'],['comments','Комментарии'],['shares','Репосты'],['publications','Публикации']].map(([key,label]) => <article key={key}><span>{label}</span><strong>{number.format(totals[key] ?? 0)}</strong></article>)}
-      </div>
+      <section className={styles.ranking}><div><h2>Итоги по креаторам</h2><p>Суммарный результат каждого креатора по всем платформам.</p></div><div className={styles.rankingGrid}>{reports.map(item => {
+          const metric = (key:string) => item.kpis.find(kpi => kpi.key === key)?.value ?? 0
+          const views = metric('views')
+          const likes = metric('likes')
+          const summaryMetrics = [['views','просмотров'],['likes','реакций'],['comments','комментариев'],['shares','репостов'],['publications','публикаций']] as const
+          return <Link to={`/app/creators/${item.creatorId}`} key={item.creatorId}>
+            <span><b>{item.creatorName}</b><small>Все платформы</small></span>
+            {summaryMetrics.map(([key, label]) => <span className={styles.creatorMetric} key={key}><b>{number.format(metric(key))}</b><small>{label}</small></span>)}
+            <strong>{views ? `${((likes/views)*100).toFixed(1)}% ER` : '—'}</strong>
+          </Link>
+        })}</div></section>
       <div className={styles.analyticsGrid}>
         <section className={styles.chartPanel}><div className={styles.panelHead}><div><h2>Динамика по дням</h2><p>Результат публикаций по дате выхода.</p></div></div><DailyPerformanceChart data={dailyAnalytics}/></section>
         <section className={styles.platformPanel}><div className={styles.panelHead}><div><h2>Платформы</h2><p>Вклад каждой площадки в результат.</p></div></div>{platformAnalytics.length ? <PlatformBreakdownChart data={platformAnalytics}/> : <div className={styles.chartEmpty}>За период публикаций нет</div>}</section>
       </div>
-      <section className={styles.ranking}><div><h2>Итоги по креаторам</h2><p>Суммарный результат каждого креатора по всем платформам.</p></div><div className={styles.rankingGrid}>{reports.map(item => {
-          const views = item.kpis.find(kpi => kpi.key === 'views')?.value ?? 0
-          const likes = item.kpis.find(kpi => kpi.key === 'likes')?.value ?? 0
-          const itemPublications = item.kpis.find(kpi => kpi.key === 'publications')?.value ?? 0
-          return <Link to={`/app/creators/${item.creatorId}`} key={item.creatorId}>
-            <span><b>{item.creatorName}</b><small>Все платформы</small></span>
-            <span className={styles.creatorMetric}><b>{number.format(views)}</b><small>просмотров</small></span>
-            <span className={styles.creatorMetric}><b>{number.format(likes)}</b><small>реакций</small></span>
-            <span className={styles.creatorMetric}><b>{number.format(itemPublications)}</b><small>публикаций</small></span>
-            <strong>{views ? `${((likes/views)*100).toFixed(1)}% ER` : '—'}</strong>
-          </Link>
-        })}</div></section>
       <section className={styles.publications}><div><h2>Публикации</h2><p>Все ролики выбранных креаторов за период.</p></div>{publications.length ? <div className={styles.table}><div className={styles.tableHead}><span>Публикация</span><span>Креатор</span><span>Платформа</span><span>Просмотры</span><span>Реакции</span></div>{publications.map(item => <article key={item.id}><div><b>{item.title || 'Без названия'}</b><small>{new Date(item.publishedAt).toLocaleDateString('ru-RU')}</small></div><span>{item.creatorName}</span><span>{item.platform}</span><strong>{number.format(item.views)}</strong><strong>{number.format(item.likes)}</strong></article>)}</div> : <p className={styles.empty}>За выбранный период публикаций нет.</p>}</section>
     </>}
   </section>
