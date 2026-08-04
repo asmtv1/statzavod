@@ -8,6 +8,8 @@ import styles from './AnalyticsPage.module.scss'
 const today = new Date().toISOString().slice(0,10)
 const monthAgo = new Date(Date.now() - 30 * 86_400_000).toISOString().slice(0,10)
 const number = new Intl.NumberFormat('ru-RU')
+const summaryMetrics = [['views','просмотров'],['likes','реакций'],['comments','комментариев'],['shares','репостов'],['publications','публикаций']] as const
+const engagementRate = (views:number, likes:number, comments:number, shares:number) => views ? `${(((likes + comments + shares) / views) * 100).toFixed(1)}% ER` : '—'
 
 export function AnalyticsPage() {
   const creators = useQuery({ queryKey:['creators'], queryFn:api.creators })
@@ -30,6 +32,7 @@ export function AnalyticsPage() {
   }, [creators.data])
 
   const reports = report.data ?? []
+  const totals = useMemo(() => Object.fromEntries(summaryMetrics.map(([key]) => [key, reports.reduce((sum, item) => sum + (item.kpis.find(kpi => kpi.key === key)?.value ?? 0), 0)])), [reports])
   const publications = useMemo(() => reports.flatMap(item => item.publications.map(publication => ({ ...publication, creatorName:item.creatorName }))).sort((a,b) => b.publishedAt.localeCompare(a.publishedAt)),[reports])
   const dailyAnalytics = useMemo<DailyAnalyticsPoint[]>(() => {
     if (!from || !to) return []
@@ -94,15 +97,22 @@ export function AnalyticsPage() {
     {report.isError ? <div className={styles.error}>{report.error.message}</div> : null}
     {!report.data ? <section className={styles.startState}><h2>Отчёт ещё не собран</h2><p>Выберите период и сотрудников выше. Здесь появятся графики, ключевые показатели и таблица публикаций.</p></section> : <>
       <div className={styles.resultHead}><div><p>РЕЗУЛЬТАТ</p><h2>{reports.length === 1 ? reports[0].creatorName : `${reports.length} креаторов`}</h2></div><a href={`/api/v1/exports?${exportQuery.toString()}`}>Скачать Excel</a></div>
-      <section className={styles.ranking}><div><h2>Итоги по креаторам</h2><p>Суммарный результат каждого креатора по всем платформам.</p></div><div className={styles.rankingGrid}>{reports.map(item => {
+      <section className={styles.ranking}><div><h2>Итоги по креаторам</h2><p>Суммарный результат каждого креатора по всем платформам.</p></div><div className={styles.rankingGrid}>
+        <div className={styles.rankingColumns}><span>Креатор</span>{summaryMetrics.map(([key, label]) => <span key={key}>{label}</span>)}<span className={styles.erHeader} tabIndex={0}>ER <small aria-hidden="true">?</small><span className={styles.erTooltip} role="tooltip">ER — коэффициент вовлечённости: (реакции + комментарии + репосты) ÷ просмотры × 100%. Чем выше показатель, тем активнее аудитория взаимодействует с контентом.</span></span></div>
+        {reports.length > 1 ? <article className={styles.rankingTotal}>
+          <span><b>Все выбранные креаторы</b><small>{reports.length} {reports.length === 1 ? 'креатор' : 'креаторов'} · все платформы</small></span>
+          {summaryMetrics.map(([key]) => <span className={styles.creatorMetric} key={key}><b>{number.format(totals[key] ?? 0)}</b></span>)}
+          <strong>{engagementRate(totals.views ?? 0, totals.likes ?? 0, totals.comments ?? 0, totals.shares ?? 0)}</strong>
+        </article> : null}{reports.map(item => {
           const metric = (key:string) => item.kpis.find(kpi => kpi.key === key)?.value ?? 0
           const views = metric('views')
           const likes = metric('likes')
-          const summaryMetrics = [['views','просмотров'],['likes','реакций'],['comments','комментариев'],['shares','репостов'],['publications','публикаций']] as const
+          const comments = metric('comments')
+          const shares = metric('shares')
           return <Link to={`/app/creators/${item.creatorId}`} key={item.creatorId}>
             <span><b>{item.creatorName}</b><small>Все платформы</small></span>
-            {summaryMetrics.map(([key, label]) => <span className={styles.creatorMetric} key={key}><b>{number.format(metric(key))}</b><small>{label}</small></span>)}
-            <strong>{views ? `${((likes/views)*100).toFixed(1)}% ER` : '—'}</strong>
+            {summaryMetrics.map(([key]) => <span className={styles.creatorMetric} key={key}><b>{number.format(metric(key))}</b></span>)}
+            <strong>{engagementRate(views, likes, comments, shares)}</strong>
           </Link>
         })}</div></section>
       <div className={styles.analyticsGrid}>
