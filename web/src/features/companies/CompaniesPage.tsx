@@ -266,6 +266,9 @@ export function CompaniesPage() {
               ) ?? {
                 oauthStatus: "",
                 oauthDisplayName: "",
+                oauthUsername: "",
+                oauthAvatarUrl: "",
+                oauthProfileUrl: "",
                 communityCount: 0,
                 syncError: "",
                 lastSuccessAt: null,
@@ -273,11 +276,27 @@ export function CompaniesPage() {
               };
               return (
                 <div className={styles.oauthBox}>
-                  <b>
-                    {account.oauthStatus === "ACTIVE"
-                      ? `VK ID подключён${account.oauthDisplayName ? ` · ${account.oauthDisplayName}` : ""}`
-                      : "VK ID ещё не подключён"}
-                  </b>
+                  {account.oauthStatus === "ACTIVE" ? (
+                    <div className={styles.connectedProfile}>
+                      {account.oauthAvatarUrl ? (
+                        <img src={account.oauthAvatarUrl} alt="" />
+                      ) : (
+                        <span className={styles.profilePlaceholder}>VK</span>
+                      )}
+                      <div>
+                        <b>VK ID подключён</b>
+                        {account.oauthProfileUrl ? (
+                          <a href={account.oauthProfileUrl} target="_blank" rel="noreferrer">
+                            {account.oauthDisplayName || account.oauthUsername} ↗
+                          </a>
+                        ) : (
+                          <span>{account.oauthDisplayName || account.oauthUsername}</span>
+                        )}
+                      </div>
+                    </div>
+                  ) : (
+                    <b>VK ID ещё не подключён</b>
+                  )}
                   <span>Сообществ назначено: {account.communityCount}</span>
                   {account.syncError ? (
                     <span className={styles.syncError}>

@@ -25,6 +25,19 @@ func TestFetchVKCommunityVideos(t *testing.T) {
 			"items": []any{map[string]any{"id": 7, "owner_id": -42, "title": "Клип", "date": 1_700_000_000, "views": 123, "likes": map[string]any{"count": 4}, "comments": 2}},
 		}})
 	})
+	mux.HandleFunc("/method/wall.get", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("owner_id") != "-42" || r.URL.Query().Get("count") != "100" {
+			t.Fatal("VK wall request has the wrong community owner")
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"response": map[string]any{
+			"count": 1,
+			"items": []any{map[string]any{
+				"id": 9, "owner_id": -42, "date": 1_700_000_001, "text": "Пост с клипом",
+				"views": map[string]any{"count": 321}, "likes": map[string]any{"count": 8}, "comments": map[string]any{"count": 3}, "reposts": map[string]any{"count": 2},
+				"attachments": []any{map[string]any{"type": "video", "video": map[string]any{"id": 10, "owner_id": -42, "title": "Клип со стены"}}},
+			}},
+		}})
+	})
 	server := httptest.NewServer(mux)
 	defer server.Close()
 	s := &Server{config: config.Config{VKAPIBase: server.URL, VKAPIVersion: "5.199"}}
@@ -38,6 +51,13 @@ func TestFetchVKCommunityVideos(t *testing.T) {
 	}
 	if len(videos) != 1 || videos[0].Views != 123 || videos[0].Likes.Count != 4 {
 		t.Fatalf("unexpected videos: %#v", videos)
+	}
+	wallVideos, err := s.fetchVKCommunityWallVideos(t.Context(), "token", groupID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(wallVideos) != 1 || wallVideos[0].Views != 321 || wallVideos[0].Likes.Count != 8 || wallVideos[0].Shares != 2 || wallVideos[0].Permalink != "https://vk.ru/wall-42_9" {
+		t.Fatalf("unexpected wall videos: %#v", wallVideos)
 	}
 }
 

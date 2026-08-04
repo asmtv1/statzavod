@@ -37,6 +37,12 @@
 .dialogHead > button { font-size: 1.65rem; line-height: 1; }
 .vkDialog { width: min(100%,36rem); }
 .oauthBox { display: grid; gap: .65rem; margin-top: 1rem; padding: .9rem; background: rgb(76 139 245 / 9%); border: 1px solid rgb(76 139 245 / 25%); border-radius: .65rem; }
+.connectedProfile { display: flex; align-items: center; gap: .8rem; }
+.connectedProfile img,.profilePlaceholder { width: 3.25rem; height: 3.25rem; flex: none; border-radius: 50%; object-fit: cover; }
+.profilePlaceholder { display: grid; place-items: center; color: white; background: #386fc9; font-weight: 800; }
+.connectedProfile > div { display: grid; gap: .18rem; min-width: 0; }
+.connectedProfile a,.connectedProfile span { color: #bdd4fa; text-decoration: none; overflow-wrap: anywhere; }
+.connectedProfile a:hover { color: white; }
 .oauthBox button { justify-self: start; padding: .58rem .75rem; color: #dce9ff; background: #386fc9; border-radius: .48rem; font-weight: 700; }
 .oauthActions { display: flex; flex-wrap: wrap; gap: .6rem; }
 .syncError { color: #ff9b8f; }

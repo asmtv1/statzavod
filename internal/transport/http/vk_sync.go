@@ -58,8 +58,10 @@ type vkVideo struct {
 	Likes       struct {
 		Count int64 `json:"count"`
 	} `json:"likes"`
-	Comments int64 `json:"comments"`
-	Image    []struct {
+	Comments  int64  `json:"comments"`
+	Shares    int64  `json:"-"`
+	Permalink string `json:"-"`
+	Image     []struct {
 		URL    string `json:"url"`
 		Width  int    `json:"width"`
 		Height int    `json:"height"`
@@ -94,6 +96,23 @@ func (s *Server) syncVKCommunities(ctx context.Context, job platformSyncJob, acc
 		if err != nil {
 			return result, err
 		}
+		wallVideos, err := s.fetchVKCommunityWallVideos(ctx, accessToken, groupID)
+		if err != nil {
+			return result, err
+		}
+		byID := make(map[string]vkVideo, len(videos)+len(wallVideos))
+		for _, video := range videos {
+			byID[vkVideoExternalID(video)] = video
+		}
+		// Prefer the wall version: it carries the public post link and the
+		// reactions that users see on the community post.
+		for _, video := range wallVideos {
+			byID[vkVideoExternalID(video)] = video
+		}
+		videos = videos[:0]
+		for _, video := range byID {
+			videos = append(videos, video)
+		}
 		result.RecordsRead += len(videos)
 		for _, video := range videos {
 			if err := s.upsertVKVideo(ctx, job, assignment.CreatorID, video); err != nil {
@@ -103,6 +122,90 @@ func (s *Server) syncVKCommunities(ctx context.Context, job platformSyncJob, acc
 		}
 	}
 	return result, nil
+}
+
+func (s *Server) fetchVKCommunityWallVideos(ctx context.Context, accessToken string, groupID int64) ([]vkVideo, error) {
+	all := make([]vkVideo, 0)
+	for offset := 0; ; offset += 100 {
+		var out struct {
+			Response struct {
+				Count int `json:"count"`
+				Items []struct {
+					ID      int64  `json:"id"`
+					OwnerID int64  `json:"owner_id"`
+					Date    int64  `json:"date"`
+					Text    string `json:"text"`
+					Views   struct {
+						Count int64 `json:"count"`
+					} `json:"views"`
+					Likes struct {
+						Count int64 `json:"count"`
+					} `json:"likes"`
+					Comments struct {
+						Count int64 `json:"count"`
+					} `json:"comments"`
+					Reposts struct {
+						Count int64 `json:"count"`
+					} `json:"reposts"`
+					Attachments []struct {
+						Type  string  `json:"type"`
+						Video vkVideo `json:"video"`
+					} `json:"attachments"`
+				} `json:"items"`
+			} `json:"response"`
+			Error *vkAPIError `json:"error"`
+		}
+		endpoint := strings.TrimRight(s.config.VKAPIBase, "/") + "/method/wall.get?" + url.Values{
+			"owner_id": {strconv.FormatInt(-groupID, 10)}, "count": {"100"}, "offset": {strconv.Itoa(offset)}, "access_token": {accessToken}, "v": {s.config.VKAPIVersion},
+		}.Encode()
+		if err := doJSON(ctx, http.MethodGet, endpoint, "", &out); err != nil {
+			return nil, err
+		}
+		if out.Error != nil {
+			return nil, classifyVKError(out.Error)
+		}
+		for _, post := range out.Response.Items {
+			for _, attachment := range post.Attachments {
+				if attachment.Type != "video" || attachment.Video.ID == 0 {
+					continue
+				}
+				video := attachment.Video
+				if video.Date == 0 {
+					video.Date = post.Date
+				}
+				if video.Title == "" {
+					video.Title = truncateVKText(post.Text, 120)
+				}
+				if video.Description == "" {
+					video.Description = post.Text
+				}
+				if video.Views == 0 {
+					video.Views = post.Views.Count
+				}
+				video.Likes.Count = post.Likes.Count
+				video.Comments = post.Comments.Count
+				video.Shares = post.Reposts.Count
+				video.Permalink = fmt.Sprintf("https://vk.ru/wall%d_%d", post.OwnerID, post.ID)
+				all = append(all, video)
+			}
+		}
+		if len(out.Response.Items) < 100 || offset+len(out.Response.Items) >= out.Response.Count {
+			break
+		}
+	}
+	return all, nil
+}
+
+func truncateVKText(value string, limit int) string {
+	runes := []rune(strings.TrimSpace(value))
+	if len(runes) <= limit {
+		return string(runes)
+	}
+	return string(runes[:limit]) + "…"
+}
+
+func vkVideoExternalID(video vkVideo) string {
+	return strconv.FormatInt(video.OwnerID, 10) + "_" + strconv.FormatInt(video.ID, 10)
 }
 
 func (s *Server) resolveVKCommunity(ctx context.Context, accessToken, communityURL string) (int64, error) {
@@ -178,7 +281,7 @@ func classifyVKError(err *vkAPIError) error {
 }
 
 func (s *Server) upsertVKVideo(ctx context.Context, job platformSyncJob, creatorID string, video vkVideo) error {
-	externalID := strconv.FormatInt(video.OwnerID, 10) + "_" + strconv.FormatInt(video.ID, 10)
+	externalID := vkVideoExternalID(video)
 	thumbnail := ""
 	maxArea := 0
 	for _, image := range video.Image {
@@ -188,6 +291,9 @@ func (s *Server) upsertVKVideo(ctx context.Context, job platformSyncJob, creator
 	}
 	publishedAt := time.Unix(video.Date, 0).UTC()
 	permalink := "https://vk.ru/video" + externalID
+	if video.Permalink != "" {
+		permalink = video.Permalink
+	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -198,7 +304,7 @@ func (s *Server) upsertVKVideo(ctx context.Context, job platformSyncJob, creator
 	if err != nil {
 		return err
 	}
-	_, err = tx.Exec(ctx, `INSERT INTO publication_metric_snapshots(publication_id,views,likes,comments,completeness_status) VALUES($1,$2,$3,$4,'PARTIAL')`, publicationID, video.Views, video.Likes.Count, video.Comments)
+	_, err = tx.Exec(ctx, `INSERT INTO publication_metric_snapshots(publication_id,views,likes,comments,shares,completeness_status) VALUES($1,$2,$3,$4,$5,'PARTIAL')`, publicationID, video.Views, video.Likes.Count, video.Comments, video.Shares)
 	if err != nil {
 		return err
 	}
