@@ -1,0 +1,114 @@
+.page {
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: 1.25rem;
+}
+
+.card {
+  width: min(100%, 34rem);
+  padding: clamp(1.5rem, 5vw, 2.5rem);
+  text-align: center;
+  background: linear-gradient(145deg, rgb(47 50 50 / 96%), rgb(28 30 30 / 98%));
+  border: 1px solid var(--border);
+  border-radius: 1.25rem;
+  box-shadow: var(--shadow);
+}
+
+.brand {
+  margin-bottom: 1.5rem;
+  color: var(--gold);
+  font-size: 0.78rem;
+  font-weight: 850;
+  letter-spacing: 0.18em;
+}
+
+.card h1 {
+  margin: 1rem 0 0.75rem;
+  font-size: clamp(1.65rem, 6vw, 2.35rem);
+  line-height: 1.08;
+}
+
+.lead {
+  margin-bottom: 1.25rem;
+  color: #d5d0c7;
+  line-height: 1.6;
+}
+
+.mark,
+.instagramMark {
+  display: grid;
+  width: 4.2rem;
+  height: 4.2rem;
+  margin: 0 auto;
+  place-items: center;
+  border-radius: 50%;
+  font-size: 2rem;
+  font-weight: 850;
+}
+
+.instagramMark {
+  color: #fff;
+  background: linear-gradient(145deg, #833ab4, #fd1d1d 58%, #fcb045);
+  box-shadow: 0 0.8rem 2rem rgb(225 48 108 / 25%);
+}
+
+.mark {
+  color: var(--text);
+  background: rgb(255 255 255 / 7%);
+  border: 1px solid var(--border);
+}
+
+.successMark {
+  color: #183126;
+  background: #9ce5bd;
+  border-color: transparent;
+}
+
+.errorMark {
+  color: #ffd0c8;
+  background: rgb(207 86 69 / 18%);
+  border-color: rgb(255 143 128 / 24%);
+}
+
+.notice {
+  display: grid;
+  gap: 0.35rem;
+  margin: 1.4rem 0;
+  padding: 1rem;
+  text-align: left;
+  background: rgb(156 229 189 / 7%);
+  border: 1px solid rgb(156 229 189 / 18%);
+  border-radius: 0.8rem;
+}
+
+.notice b {
+  color: #bcefd0;
+  font-size: 0.85rem;
+}
+
+.notice span,
+.card small {
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+.card button {
+  width: 100%;
+  margin-bottom: 1rem;
+  padding: 0.82rem 1rem;
+  color: #15251c;
+  background: linear-gradient(135deg, #bcefd0, #86d9aa);
+  border: 0;
+  border-radius: 0.65rem;
+  cursor: pointer;
+  font-weight: 800;
+  box-shadow: 0 0.7rem 1.6rem rgb(69 162 110 / 18%);
+}
+
+.done {
+  margin: 1.25rem 0 0;
+  color: #bcefd0;
+  font-weight: 700;
+}

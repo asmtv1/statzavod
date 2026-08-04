@@ -17,6 +17,7 @@ export type CreatorHistoryEvent = { id:string; changedAt:string; changedBy:strin
 export type PlatformAccount = {id:string;platform:string;username:string;displayName:string;status:string;profileUrl:string}
 export type Platform = 'YOUTUBE' | 'INSTAGRAM' | 'TIKTOK' | 'VK'
 export type PlatformConnection = {id:string;platform:Platform;username:string;displayName:string;status:string;oauthStatus:string;avatarUrl:string;profileUrl:string;scopes:string[];lastSyncedAt:string | null}
+export type InstagramConnectionInvitation = {id:string;expiresAt:string;createdAt?:string}
 export type IntegrationStatus = {id:Platform;name:string;configured:boolean;connectedAccounts:number}
 export type SyncAccount = {
   id:string
@@ -79,5 +80,10 @@ export const api = {
   connections:(id:string)=>request<{items:PlatformConnection[]}>(`/creators/${id}/connections`),
   integrations:()=>request<{items:IntegrationStatus[];accounts:SyncAccount[]}>('/integrations'),
   startAuthorization:(id:string,platform:string)=>request<{authorizationUrl:string;expiresAt:string}>(`/creators/${id}/connections/${platform.toLowerCase()}/authorize`,{method:'POST'}),
+  instagramConnectionInvitation:(id:string)=>request<{invitation:InstagramConnectionInvitation|null}>(`/creators/${id}/connections/instagram/invitation`),
+  createInstagramConnectionInvitation:(id:string)=>request<{id:string;connectionUrl:string;expiresAt:string}>(`/creators/${id}/connections/instagram/invitations`,{method:'POST'}),
+  revokeInstagramConnectionInvitation:(creatorId:string,invitationId:string)=>request<void>(`/creators/${creatorId}/connections/instagram/invitations/${invitationId}`,{method:'DELETE'}),
+  instagramConnectionInvitationInfo:(token:string)=>request<{creatorName:string;expiresAt:string}>(`/oauth/connection-invitations/instagram/${encodeURIComponent(token)}`),
+  instagramConnectionInvitationAuthorizationUrl:(token:string)=>`/api/v1/oauth/connection-invitations/instagram/${encodeURIComponent(token)}/authorize`,
   purgePlatformData:(id:string)=>request<void>(`/platform-accounts/${id}/data`,{method:'DELETE'}),
 }

@@ -3,10 +3,37 @@ package httpserver
 import (
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 
 	"github.com/statzavod/statzavod/internal/config"
 )
+
+func TestInstagramAuthorizationURL(t *testing.T) {
+	s := &Server{config: config.Config{}}
+	provider := oauthProvider{
+		ID:           "INSTAGRAM",
+		ClientID:     "client-id",
+		RedirectURL:  "https://statzavod.test/api/v1/oauth/instagram/callback",
+		AuthorizeURL: "https://www.instagram.com/oauth/authorize",
+		Scopes:       []string{"instagram_business_basic", "instagram_business_manage_insights"},
+	}
+	authorizationURL := s.oauthAuthorizationURL(provider, "opaque-state", "unused-challenge")
+	parsed, err := url.Parse(authorizationURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	query := parsed.Query()
+	if query.Get("client_id") != provider.ClientID || query.Get("redirect_uri") != provider.RedirectURL || query.Get("state") != "opaque-state" {
+		t.Fatalf("unexpected authorization query: %s", parsed.RawQuery)
+	}
+	if query.Get("scope") != "instagram_business_basic,instagram_business_manage_insights" {
+		t.Fatalf("unexpected Instagram scopes: %q", query.Get("scope"))
+	}
+	if query.Has("code_challenge") {
+		t.Fatal("Instagram authorization unexpectedly included PKCE parameters")
+	}
+}
 
 func TestCompleteYouTubeOAuth(t *testing.T) {
 	mux := http.NewServeMux()

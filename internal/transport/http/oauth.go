@@ -106,23 +106,32 @@ func (s *Server) oauthAuthorize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	state, verifier, challenge, err := platforms.NewPKCE()
-	if err != nil {
-		problem(w, http.StatusInternalServerError, "OAuth state creation failed", "could not create a secure authorization state")
-		return
-	}
-	encryptedVerifier, nonce, err := s.envelope.Encrypt([]byte(verifier))
-	if err != nil {
-		problem(w, http.StatusInternalServerError, "OAuth state creation failed", "could not protect the authorization state")
-		return
-	}
-	hash := sha256.Sum256([]byte(state))
-	_, err = s.pool.Exec(r.Context(), `INSERT INTO oauth_states(organization_id,creator_id,platform,state_hash,pkce_verifier_ciphertext,nonce,expires_at,initiated_by) VALUES($1,$2,$3,$4,$5,$6,now()+interval '10 minutes',$7)`, p.OrganizationID, creatorID, provider.ID, hash[:], encryptedVerifier, nonce, p.ID)
+	state, challenge, err := s.createCreatorOAuthState(r.Context(), p.OrganizationID, creatorID, provider, &p.ID, nil)
 	if err != nil {
 		problem(w, http.StatusInternalServerError, "OAuth state creation failed", "could not start "+provider.Name+" authorization")
 		return
 	}
+	writeJSON(w, http.StatusOK, map[string]any{"authorizationUrl": s.oauthAuthorizationURL(provider, state, challenge), "expiresAt": time.Now().Add(10 * time.Minute)})
+}
 
+func (s *Server) createCreatorOAuthState(ctx context.Context, organizationID, creatorID string, provider oauthProvider, initiatedBy, invitationID *string) (string, string, error) {
+	state, verifier, challenge, err := platforms.NewPKCE()
+	if err != nil {
+		return "", "", err
+	}
+	encryptedVerifier, nonce, err := s.envelope.Encrypt([]byte(verifier))
+	if err != nil {
+		return "", "", err
+	}
+	hash := sha256.Sum256([]byte(state))
+	_, err = s.pool.Exec(ctx, `INSERT INTO oauth_states(organization_id,creator_id,platform,state_hash,pkce_verifier_ciphertext,nonce,expires_at,initiated_by,connection_invitation_id) VALUES($1,$2,$3,$4,$5,$6,now()+interval '10 minutes',$7,$8)`, organizationID, creatorID, provider.ID, hash[:], encryptedVerifier, nonce, initiatedBy, invitationID)
+	if err != nil {
+		return "", "", err
+	}
+	return state, challenge, nil
+}
+
+func (s *Server) oauthAuthorizationURL(provider oauthProvider, state, challenge string) string {
 	q := url.Values{
 		"redirect_uri":  {provider.RedirectURL},
 		"response_type": {"code"},
@@ -155,7 +164,7 @@ func (s *Server) oauthAuthorize(w http.ResponseWriter, r *http.Request) {
 		q.Set("code_challenge", challenge)
 		q.Set("code_challenge_method", "S256")
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"authorizationUrl": provider.AuthorizeURL + "?" + q.Encode(), "expiresAt": time.Now().Add(10 * time.Minute)})
+	return provider.AuthorizeURL + "?" + q.Encode()
 }
 
 func (s *Server) companyVKOAuthAuthorize(w http.ResponseWriter, r *http.Request) {
@@ -213,14 +222,24 @@ func (s *Server) oauthCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	hash := sha256.Sum256([]byte(state))
 	var organizationID string
-	var creatorID, companyVKAccountID *string
+	var creatorID, companyVKAccountID, connectionInvitationID *string
 	var encryptedVerifier, nonce []byte
-	err := s.pool.QueryRow(r.Context(), `UPDATE oauth_states SET consumed_at=now() WHERE state_hash=$1 AND platform=$2 AND consumed_at IS NULL AND expires_at>now() RETURNING organization_id,creator_id,company_vk_account_id,pkce_verifier_ciphertext,nonce`, hash[:], provider.ID).Scan(&organizationID, &creatorID, &companyVKAccountID, &encryptedVerifier, &nonce)
+	err := s.pool.QueryRow(r.Context(), `UPDATE oauth_states SET consumed_at=now() WHERE state_hash=$1 AND platform=$2 AND consumed_at IS NULL AND expires_at>now() RETURNING organization_id,creator_id,company_vk_account_id,connection_invitation_id,pkce_verifier_ciphertext,nonce`, hash[:], provider.ID).Scan(&organizationID, &creatorID, &companyVKAccountID, &connectionInvitationID, &encryptedVerifier, &nonce)
 	if err != nil {
+		var delegated bool
+		_ = s.pool.QueryRow(r.Context(), `SELECT connection_invitation_id IS NOT NULL FROM oauth_states WHERE state_hash=$1 AND platform=$2`, hash[:], provider.ID).Scan(&delegated)
+		if delegated {
+			s.redirectToApp(w, r, "/connect/instagram/result?oauth=expired")
+			return
+		}
 		s.redirectToApp(w, r, "/login?oauth="+platformKey+"-expired")
 		return
 	}
 	redirect := func(result string) {
+		if connectionInvitationID != nil {
+			s.redirectToApp(w, r, "/connect/instagram/result?oauth="+url.QueryEscape(result))
+			return
+		}
 		if companyVKAccountID != nil {
 			s.redirectToApp(w, r, "/app/companies?platform=vk&oauth="+url.QueryEscape(result))
 			return
@@ -249,8 +268,28 @@ func (s *Server) oauthCallback(w http.ResponseWriter, r *http.Request) {
 		redirect("state-error")
 		return
 	}
+	invitationClaimed := false
+	releaseInvitation := func() {
+		if invitationClaimed && connectionInvitationID != nil {
+			_, _ = s.pool.Exec(r.Context(), `UPDATE oauth_connection_invitations SET consumed_at=NULL WHERE id=$1 AND consumed_at IS NOT NULL AND revoked_at IS NULL AND expires_at>now()`, *connectionInvitationID)
+			invitationClaimed = false
+		}
+	}
+	if connectionInvitationID != nil {
+		if creatorID == nil {
+			redirect("state-error")
+			return
+		}
+		result, claimErr := s.pool.Exec(r.Context(), `UPDATE oauth_connection_invitations SET consumed_at=now() WHERE id=$1 AND organization_id=$2 AND creator_id=$3 AND consumed_at IS NULL AND revoked_at IS NULL AND expires_at>now()`, *connectionInvitationID, organizationID, *creatorID)
+		if claimErr != nil || result.RowsAffected() != 1 {
+			redirect("expired")
+			return
+		}
+		invitationClaimed = true
+	}
 	token, profile, err := s.completeOAuth(r.Context(), provider, code, string(verifier), state, r.URL.Query().Get("device_id"))
 	if err != nil {
+		releaseInvitation()
 		// Keep provider details out of the browser, but retain them in the server
 		// log so an OAuth failure can be diagnosed without replaying a one-time code.
 		log.Printf("%s OAuth completion failed: %v", provider.Name, err)
@@ -265,6 +304,7 @@ func (s *Server) oauthCallback(w http.ResponseWriter, r *http.Request) {
 		err = fmt.Errorf("OAuth state has no owner")
 	}
 	if err != nil {
+		releaseInvitation()
 		redirect("save-error")
 		return
 	}

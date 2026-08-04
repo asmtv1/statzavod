@@ -46,6 +46,8 @@ func (s *Server) Router() http.Handler {
 	r.Get("/readyz", s.ready)
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Get("/oauth/{platform}/callback", s.oauthCallback)
+		r.Get("/oauth/connection-invitations/instagram/{token}", s.instagramConnectionInvitationInfo)
+		r.Get("/oauth/connection-invitations/instagram/{token}/authorize", s.authorizeInstagramConnectionInvitation)
 		r.Post("/oauth/instagram/deauthorize", s.instagramDeauthorize)
 		r.Post("/oauth/instagram/data-deletion", s.instagramDataDeletion)
 		r.Get("/oauth/instagram/data-deletion/status", s.instagramDataDeletionStatus)
@@ -81,6 +83,9 @@ func (s *Server) Router() http.Handler {
 			r.Get("/creators/{id}/accounts", s.listCreatorAccounts)
 			r.With(s.require("ADMIN", "ANALYST")).Post("/creators/{id}/accounts", s.createCreatorAccount)
 			r.With(s.require("ADMIN", "ANALYST")).Post("/creators/{id}/connections/{platform}/authorize", s.oauthAuthorize)
+			r.Get("/creators/{id}/connections/instagram/invitation", s.currentInstagramConnectionInvitation)
+			r.With(s.require("ADMIN", "ANALYST")).Post("/creators/{id}/connections/instagram/invitations", s.createInstagramConnectionInvitation)
+			r.With(s.require("ADMIN", "ANALYST")).Delete("/creators/{id}/connections/instagram/invitations/{invitationID}", s.revokeInstagramConnectionInvitation)
 			r.Get("/creators/{id}/connections", s.platformConnections)
 			r.Get("/integrations", s.integrationStatus)
 			r.With(s.require("ADMIN")).Delete("/platform-accounts/{id}/connection", s.disconnectPlatform)
