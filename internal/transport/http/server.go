@@ -63,6 +63,7 @@ func (s *Server) Router() http.Handler {
 			r.With(s.require("ADMIN", "ANALYST")).Post("/companies/{id}/vk-account/authorize", s.companyVKOAuthAuthorize)
 			r.With(s.require("ADMIN")).Post("/company-vk-accounts/{id}/password/reveal", s.revealCompanyVKPassword)
 			r.With(s.require("ADMIN", "ANALYST")).Delete("/companies/{id}", s.archiveCompany)
+			r.With(s.require("ADMIN", "ANALYST")).Delete("/companies/{id}/permanent", s.deleteCompany)
 			r.Get("/analytics/summary", s.summary)
 			r.Get("/analytics/timeseries", s.timeseries)
 			r.Get("/analytics/creators/{id}", s.creatorAnalytics)

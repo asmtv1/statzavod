@@ -90,3 +90,50 @@ func (s *Server) archiveCompany(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
+
+func (s *Server) deleteCompany(w http.ResponseWriter, r *http.Request) {
+	p := r.Context().Value(principalKey).(principal)
+	id := chi.URLParam(r, "id")
+	tx, err := s.pool.Begin(r.Context())
+	if err != nil {
+		problem(w, http.StatusInternalServerError, "deletion failed", "could not start deletion")
+		return
+	}
+	defer tx.Rollback(r.Context())
+
+	// Keep imported platform data and statistics intact, but remove sync jobs
+	// owned by the company's shared VK account before the account is cascaded.
+	if _, err = tx.Exec(r.Context(), `
+		DELETE FROM sync_runs
+		WHERE target_id IN (
+			SELECT st.id FROM sync_targets st
+			JOIN company_vk_accounts a ON a.platform_account_id=st.target_id
+			WHERE a.company_id=$1 AND a.organization_id=$2
+		)`, id, p.OrganizationID); err != nil {
+		problem(w, http.StatusInternalServerError, "deletion failed", "could not remove sync history")
+		return
+	}
+	if _, err = tx.Exec(r.Context(), `
+		DELETE FROM sync_targets
+		WHERE target_id IN (
+			SELECT a.platform_account_id FROM company_vk_accounts a
+			WHERE a.company_id=$1 AND a.organization_id=$2 AND a.platform_account_id IS NOT NULL
+		)`, id, p.OrganizationID); err != nil {
+		problem(w, http.StatusInternalServerError, "deletion failed", "could not remove sync jobs")
+		return
+	}
+	tag, err := tx.Exec(r.Context(), `DELETE FROM companies WHERE id=$1 AND organization_id=$2`, id, p.OrganizationID)
+	if err != nil || tag.RowsAffected() == 0 {
+		problem(w, http.StatusNotFound, "not found", "company does not exist")
+		return
+	}
+	if _, err = tx.Exec(r.Context(), `INSERT INTO audit_logs(organization_id,actor_id,action,entity_type,entity_id) VALUES($1,$2,'DELETE','COMPANY',$3)`, p.OrganizationID, p.ID, id); err != nil {
+		problem(w, http.StatusInternalServerError, "deletion failed", "could not write audit log")
+		return
+	}
+	if err = tx.Commit(r.Context()); err != nil {
+		problem(w, http.StatusInternalServerError, "deletion failed", "could not delete company")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}

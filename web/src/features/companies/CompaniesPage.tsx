@@ -8,6 +8,7 @@ import styles from "./CompaniesPage.module.scss";
 export function CompaniesPage() {
   const [name, setName] = useState("");
   const [pendingArchive, setPendingArchive] = useState<Company | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<Company | null>(null);
   const [vkCompany, setVkCompany] = useState<Company | null>(null);
   const [syncQueued, setSyncQueued] = useState(false);
   const [vkForm, setVkForm] = useState<{
@@ -41,6 +42,17 @@ export function CompaniesPage() {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["companies"] }),
         queryClient.invalidateQueries({ queryKey: ["creators"] }),
+      ]);
+    },
+  });
+  const remove = useMutation({
+    mutationFn: api.deleteCompany,
+    onSuccess: async () => {
+      setPendingDelete(null);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["companies"] }),
+        queryClient.invalidateQueries({ queryKey: ["creators"] }),
+        queryClient.invalidateQueries({ queryKey: ["company-vk-accounts"] }),
       ]);
     },
   });
@@ -174,6 +186,13 @@ export function CompaniesPage() {
                   >
                     Архивировать
                   </button>
+                  <button
+                    type="button"
+                    className={styles.delete}
+                    onClick={() => setPendingDelete(company)}
+                  >
+                    Удалить
+                  </button>
                 </div>
               </article>
             );
@@ -215,6 +234,43 @@ export function CompaniesPage() {
                 disabled={archive.isPending}
               >
                 {archive.isPending ? "Архивируем…" : "Архивировать"}
+              </button>
+            </footer>
+          </div>
+        </div>
+      ) : null}
+      {pendingDelete ? (
+        <div
+          className={styles.backdrop}
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !remove.isPending)
+              setPendingDelete(null);
+          }}
+        >
+          <div className={styles.dialog} role="dialog" aria-modal="true">
+            <h2>Удалить «{pendingDelete.name}»?</h2>
+            <p>
+              Компания и её настройки VK будут удалены навсегда. Креаторы
+              перейдут в категорию «Без компании», а их карточки и статистика
+              сохранятся.
+            </p>
+            {remove.isError ? (
+              <p className={styles.error}>{remove.error.message}</p>
+            ) : null}
+            <footer>
+              <button
+                onClick={() => setPendingDelete(null)}
+                disabled={remove.isPending}
+              >
+                Отмена
+              </button>
+              <button
+                className={styles.confirm}
+                onClick={() => remove.mutate(pendingDelete.id)}
+                disabled={remove.isPending}
+              >
+                {remove.isPending ? "Удаляем…" : "Удалить навсегда"}
               </button>
             </footer>
           </div>

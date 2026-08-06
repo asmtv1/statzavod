@@ -76,6 +76,11 @@ paths:
       summary: Archive company and detach its creators
       parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
       responses: { '204': { description: Archived }, '404': { $ref: '#/components/responses/Problem' } }
+  /companies/{id}/permanent:
+    delete:
+      summary: Permanently delete a company and detach its creators
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses: { '204': { description: Deleted }, '404': { $ref: '#/components/responses/Problem' } }
   /creators/{id}/work-status:
     patch:
       summary: Update creator work status and comment

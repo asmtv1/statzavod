@@ -49,6 +49,7 @@ export const api = {
   companies:()=>request<{items:Company[]}>('/companies'),
   createCompany:(name:string)=>request<{id:string;name:string}>('/companies',{method:'POST',body:JSON.stringify({name})}),
   archiveCompany:(id:string)=>request<void>(`/companies/${id}`,{method:'DELETE'}),
+  deleteCompany:(id:string)=>request<void>(`/companies/${id}/permanent`,{method:'DELETE'}),
   companyVkAccounts:()=>request<{items:CompanyVkAccount[]}>('/company-vk-accounts'),
   saveCompanyVkAccount:(companyId:string,payload:{accessMethod:'LOGIN'|'PHONE';login:string;password:string;phone:string})=>request<{id:string}>(`/companies/${companyId}/vk-account`,{method:'PUT',body:JSON.stringify(payload)}),
   startCompanyVkAuthorization:(companyId:string)=>request<{authorizationUrl:string;expiresAt:string}>(`/companies/${companyId}/vk-account/authorize`,{method:'POST'}),
