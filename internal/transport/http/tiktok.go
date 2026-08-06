@@ -16,7 +16,7 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-const tiktokScopes = "user.info.basic,user.info.stats,video.list"
+const tiktokScopes = "user.info.basic,user.info.profile,user.info.stats,video.list"
 
 type tiktokTokenData struct {
 	AccessToken  string `json:"access_token"`
@@ -27,13 +27,17 @@ type tiktokTokenData struct {
 }
 
 type tiktokUser struct {
-	OpenID         string `json:"open_id"`
-	DisplayName    string `json:"display_name"`
-	AvatarURL      string `json:"avatar_url"`
-	FollowerCount  int64  `json:"follower_count"`
-	FollowingCount int64  `json:"following_count"`
-	LikesCount     int64  `json:"likes_count"`
-	VideoCount     int64  `json:"video_count"`
+	OpenID          string `json:"open_id"`
+	DisplayName     string `json:"display_name"`
+	AvatarURL       string `json:"avatar_url"`
+	Username        string `json:"username"`
+	ProfileDeepLink string `json:"profile_deep_link"`
+	BioDescription  string `json:"bio_description"`
+	IsVerified      bool   `json:"is_verified"`
+	FollowerCount   int64  `json:"follower_count"`
+	FollowingCount  int64  `json:"following_count"`
+	LikesCount      int64  `json:"likes_count"`
+	VideoCount      int64  `json:"video_count"`
 }
 
 type tiktokVideo struct {
@@ -147,7 +151,7 @@ func (s *Server) refreshTikTokToken(ctx context.Context, refreshToken string) (t
 }
 
 func (s *Server) fetchTikTokUser(ctx context.Context, accessToken string) (tiktokUser, error) {
-	endpoint := strings.TrimRight(s.config.TikTokAPIBase, "/") + "/v2/user/info/?fields=open_id,display_name,avatar_url,follower_count,following_count,likes_count,video_count"
+	endpoint := strings.TrimRight(s.config.TikTokAPIBase, "/") + "/v2/user/info/?fields=open_id,display_name,avatar_url,username,profile_deep_link,bio_description,is_verified,follower_count,following_count,likes_count,video_count"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return tiktokUser{}, err
@@ -189,7 +193,7 @@ func (s *Server) saveTikTokConnection(ctx context.Context, organizationID, creat
 	}
 	defer tx.Rollback(ctx)
 	var accountID string
-	err = tx.QueryRow(ctx, `INSERT INTO platform_accounts(organization_id,platform,external_id,username,display_name,profile_url,avatar_url,account_type,status,metadata,last_synced_at) VALUES($1,'TIKTOK',$2,$3,$4,$5,$6,'CREATOR','ACTIVE',$7::jsonb,now()) ON CONFLICT(organization_id,platform,external_id) DO UPDATE SET username=excluded.username,display_name=excluded.display_name,avatar_url=excluded.avatar_url,status='ACTIVE',metadata=excluded.metadata,updated_at=now() RETURNING id`, organizationID, user.OpenID, user.DisplayName, user.DisplayName, "https://www.tiktok.com/@"+user.DisplayName, user.AvatarURL, tikTokMetadata(user)).Scan(&accountID)
+	err = tx.QueryRow(ctx, `INSERT INTO platform_accounts(organization_id,platform,external_id,username,display_name,profile_url,avatar_url,account_type,status,metadata,last_synced_at) VALUES($1,'TIKTOK',$2,$3,$4,$5,$6,'CREATOR','ACTIVE',$7::jsonb,now()) ON CONFLICT(organization_id,platform,external_id) DO UPDATE SET username=excluded.username,display_name=excluded.display_name,profile_url=excluded.profile_url,avatar_url=excluded.avatar_url,status='ACTIVE',metadata=excluded.metadata,updated_at=now() RETURNING id`, organizationID, user.OpenID, tiktokUsername(user), user.DisplayName, tiktokProfileURL(user), user.AvatarURL, tikTokMetadata(user)).Scan(&accountID)
 	if err != nil {
 		return err
 	}
@@ -215,8 +219,22 @@ func (s *Server) saveTikTokConnection(ctx context.Context, organizationID, creat
 }
 
 func tikTokMetadata(user tiktokUser) string {
-	b, _ := json.Marshal(map[string]int64{"followerCount": user.FollowerCount, "followingCount": user.FollowingCount, "likesCount": user.LikesCount, "videoCount": user.VideoCount})
+	b, _ := json.Marshal(map[string]any{"followerCount": user.FollowerCount, "followingCount": user.FollowingCount, "likesCount": user.LikesCount, "videoCount": user.VideoCount, "bioDescription": user.BioDescription, "isVerified": user.IsVerified})
 	return string(b)
+}
+
+func tiktokUsername(user tiktokUser) string {
+	if user.Username != "" {
+		return user.Username
+	}
+	return user.DisplayName
+}
+
+func tiktokProfileURL(user tiktokUser) string {
+	if user.ProfileDeepLink != "" {
+		return user.ProfileDeepLink
+	}
+	return "https://www.tiktok.com/@" + tiktokUsername(user)
 }
 
 func (s *Server) tiktokConnections(w http.ResponseWriter, r *http.Request) {

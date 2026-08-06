@@ -287,7 +287,7 @@ func (s *Server) completeOAuth(ctx context.Context, provider oauthProvider, code
 			return oauthToken{}, platformProfile{}, fmt.Errorf("TikTok profile is unavailable")
 		}
 		return oauthToken{AccessToken: token.AccessToken, RefreshToken: token.RefreshToken, Scopes: splitScopes(token.Scope, provider.Scopes), ExpiresIn: token.ExpiresIn, ExternalID: token.OpenID},
-			platformProfile{ExternalID: user.OpenID, Username: user.DisplayName, DisplayName: user.DisplayName, ProfileURL: "https://www.tiktok.com/@" + user.DisplayName, AvatarURL: user.AvatarURL, AccountType: "CREATOR", Metadata: map[string]any{"followerCount": user.FollowerCount, "followingCount": user.FollowingCount, "likesCount": user.LikesCount, "videoCount": user.VideoCount}}, nil
+			platformProfile{ExternalID: user.OpenID, Username: tiktokUsername(user), DisplayName: user.DisplayName, ProfileURL: tiktokProfileURL(user), AvatarURL: user.AvatarURL, AccountType: "CREATOR", Metadata: map[string]any{"followerCount": user.FollowerCount, "followingCount": user.FollowingCount, "likesCount": user.LikesCount, "videoCount": user.VideoCount, "bioDescription": user.BioDescription, "isVerified": user.IsVerified}}, nil
 	case "YOUTUBE":
 		return s.completeYouTubeOAuth(ctx, provider, code, verifier)
 	case "INSTAGRAM":
@@ -648,7 +648,7 @@ func (s *Server) savePlatformConnection(ctx context.Context, organizationID, cre
 func (s *Server) platformConnections(w http.ResponseWriter, r *http.Request) {
 	p := r.Context().Value(principalKey).(principal)
 	creatorID := chi.URLParam(r, "id")
-	rows, err := s.pool.Query(r.Context(), `SELECT a.id,a.platform,a.username,a.display_name,a.status,COALESCE(a.avatar_url,''),COALESCE(a.profile_url,''),COALESCE(c.scopes,'{}'),a.last_synced_at,COALESCE(c.status,'') FROM platform_accounts a JOIN creator_account_assignments x ON x.platform_account_id=a.id AND x.valid_to IS NULL LEFT JOIN oauth_connections c ON c.platform_account_id=a.id WHERE x.creator_id=$1 AND a.organization_id=$2 ORDER BY a.platform,a.created_at DESC`, creatorID, p.OrganizationID)
+	rows, err := s.pool.Query(r.Context(), `SELECT a.id,a.platform,a.username,a.display_name,a.status,COALESCE(a.avatar_url,''),COALESCE(a.profile_url,''),COALESCE(c.scopes,'{}'),a.last_synced_at,COALESCE(c.status,''),a.metadata FROM platform_accounts a JOIN creator_account_assignments x ON x.platform_account_id=a.id AND x.valid_to IS NULL LEFT JOIN oauth_connections c ON c.platform_account_id=a.id WHERE x.creator_id=$1 AND a.organization_id=$2 ORDER BY a.platform,a.created_at DESC`, creatorID, p.OrganizationID)
 	if err != nil {
 		problem(w, http.StatusInternalServerError, "connections failed", "could not load platform connections")
 		return
@@ -658,12 +658,15 @@ func (s *Server) platformConnections(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var id, platform, username, display, status, avatar, profileURL, oauthStatus string
 		var scopes []string
+		var metadata []byte
 		var synced *time.Time
-		if err := rows.Scan(&id, &platform, &username, &display, &status, &avatar, &profileURL, &scopes, &synced, &oauthStatus); err != nil {
+		if err := rows.Scan(&id, &platform, &username, &display, &status, &avatar, &profileURL, &scopes, &synced, &oauthStatus, &metadata); err != nil {
 			problem(w, http.StatusInternalServerError, "connections failed", "could not read platform connection")
 			return
 		}
-		items = append(items, map[string]any{"id": id, "platform": platform, "username": username, "displayName": display, "status": status, "oauthStatus": oauthStatus, "avatarUrl": avatar, "profileUrl": profileURL, "scopes": scopes, "lastSyncedAt": synced})
+		values := map[string]any{}
+		_ = json.Unmarshal(metadata, &values)
+		items = append(items, map[string]any{"id": id, "platform": platform, "username": username, "displayName": display, "status": status, "oauthStatus": oauthStatus, "avatarUrl": avatar, "profileUrl": profileURL, "scopes": scopes, "lastSyncedAt": synced, "bioDescription": values["bioDescription"], "isVerified": values["isVerified"]})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }

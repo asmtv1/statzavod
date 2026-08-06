@@ -16,7 +16,7 @@ export type CreatorHistoryChange = { id:string; section:string; fieldKey:string;
 export type CreatorHistoryEvent = { id:string; changedAt:string; changedBy:string; changes:CreatorHistoryChange[] }
 export type PlatformAccount = {id:string;platform:string;username:string;displayName:string;status:string;profileUrl:string}
 export type Platform = 'YOUTUBE' | 'INSTAGRAM' | 'TIKTOK' | 'VK'
-export type PlatformConnection = {id:string;platform:Platform;username:string;displayName:string;status:string;oauthStatus:string;avatarUrl:string;profileUrl:string;scopes:string[];lastSyncedAt:string | null}
+export type PlatformConnection = {id:string;platform:Platform;username:string;displayName:string;status:string;oauthStatus:string;avatarUrl:string;profileUrl:string;scopes:string[];lastSyncedAt:string | null;bioDescription?:string;isVerified?:boolean}
 export type IntegrationStatus = {id:Platform;name:string;configured:boolean;connectedAccounts:number}
 export type SyncAccount = {
   id:string
