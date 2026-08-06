@@ -143,10 +143,10 @@ func (s *Server) finishPlatformSync(ctx context.Context, job platformSyncJob, re
 		if _, err = tx.Exec(ctx, `UPDATE sync_runs SET finished_at=now(),outcome='SUCCESS',records_read=$2,records_written=$3 WHERE id=$1`, job.RunID, result.RecordsRead, result.RecordsWritten); err != nil {
 			return err
 		}
-		if _, err = tx.Exec(ctx, `UPDATE sync_targets SET last_success_at=now(),last_error=NULL,consecutive_failures=0 WHERE id=$1`, job.TargetID); err != nil {
+		if _, err = tx.Exec(ctx, `UPDATE sync_targets SET last_success_at=now(),last_error=NULL,consecutive_failures=0 WHERE id=$1 AND status='ACTIVE'`, job.TargetID); err != nil {
 			return err
 		}
-		if _, err = tx.Exec(ctx, `UPDATE platform_accounts SET last_synced_at=now(),last_error=NULL,status='ACTIVE',updated_at=now() WHERE id=$1`, job.AccountID); err != nil {
+		if _, err = tx.Exec(ctx, `UPDATE platform_accounts SET last_synced_at=now(),last_error=NULL,status='ACTIVE',updated_at=now() WHERE id=$1 AND status<>'DISCONNECTED' AND EXISTS(SELECT 1 FROM sync_targets WHERE id=$2 AND status='ACTIVE') AND EXISTS(SELECT 1 FROM oauth_connections WHERE platform_account_id=$1 AND status='ACTIVE')`, job.AccountID, job.TargetID); err != nil {
 			return err
 		}
 		return tx.Commit(ctx)
@@ -159,7 +159,7 @@ func (s *Server) finishPlatformSync(ctx context.Context, job platformSyncJob, re
 	if _, err = tx.Exec(ctx, `UPDATE sync_runs SET finished_at=now(),outcome='FAILED',records_read=$2,records_written=$3,error_message=$4 WHERE id=$1`, job.RunID, result.RecordsRead, result.RecordsWritten, message); err != nil {
 		return err
 	}
-	if _, err = tx.Exec(ctx, `UPDATE sync_targets SET last_error=$2,consecutive_failures=consecutive_failures+1 WHERE id=$1`, job.TargetID, message); err != nil {
+	if _, err = tx.Exec(ctx, `UPDATE sync_targets SET last_error=$2,consecutive_failures=consecutive_failures+1 WHERE id=$1 AND status='ACTIVE'`, job.TargetID, message); err != nil {
 		return err
 	}
 	accountStatus := "ACTIVE"
@@ -168,11 +168,11 @@ func (s *Server) finishPlatformSync(ctx context.Context, job platformSyncJob, re
 		accountStatus = "REAUTH_REQUIRED"
 		oauthStatus = "REAUTH_REQUIRED"
 	}
-	if _, err = tx.Exec(ctx, `UPDATE platform_accounts SET last_error=$2,status=$3,updated_at=now() WHERE id=$1`, job.AccountID, message, accountStatus); err != nil {
+	if _, err = tx.Exec(ctx, `UPDATE platform_accounts SET last_error=$2,status=$3,updated_at=now() WHERE id=$1 AND status<>'DISCONNECTED' AND EXISTS(SELECT 1 FROM sync_targets WHERE id=$4 AND status='ACTIVE') AND EXISTS(SELECT 1 FROM oauth_connections WHERE platform_account_id=$1 AND status='ACTIVE')`, job.AccountID, message, accountStatus, job.TargetID); err != nil {
 		return err
 	}
 	if oauthStatus != "ACTIVE" {
-		if _, err = tx.Exec(ctx, `UPDATE oauth_connections SET status=$2,updated_at=now() WHERE platform_account_id=$1`, job.AccountID, oauthStatus); err != nil {
+		if _, err = tx.Exec(ctx, `UPDATE oauth_connections SET status=$2,updated_at=now() WHERE platform_account_id=$1 AND EXISTS(SELECT 1 FROM sync_targets WHERE id=$3 AND status='ACTIVE')`, job.AccountID, oauthStatus, job.TargetID); err != nil {
 			return err
 		}
 	}
@@ -367,8 +367,14 @@ func (s *Server) requestAccountSync(w http.ResponseWriter, r *http.Request) {
 	p := r.Context().Value(principalKey).(principal)
 	accountID := chi.URLParam(r, "id")
 	tag, err := s.pool.Exec(r.Context(), `
-		UPDATE sync_targets SET next_sync_at=now(),status='ACTIVE',last_error=NULL
-		WHERE target_id=$1 AND organization_id=$2
+		UPDATE sync_targets target SET next_sync_at=now(),status='ACTIVE',last_error=NULL
+		WHERE target.target_id=$1 AND target.organization_id=$2
+		  AND EXISTS(
+			SELECT 1 FROM platform_accounts account
+			JOIN oauth_connections oauth ON oauth.platform_account_id=account.id AND oauth.organization_id=account.organization_id
+			WHERE account.id=target.target_id AND account.organization_id=target.organization_id
+			  AND account.status='ACTIVE' AND oauth.status='ACTIVE'
+		  )
 	`, accountID, p.OrganizationID)
 	if err != nil {
 		problem(w, http.StatusInternalServerError, "sync request failed", "could not queue synchronization")

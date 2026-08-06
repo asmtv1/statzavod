@@ -1,14 +1,22 @@
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { createContext, useCallback, useContext, useLayoutEffect, useMemo, useState, type ReactNode } from 'react'
+import { useLocation } from 'react-router-dom'
+import { publicPathLocale, readStoredLocale, storeLocale, type Locale } from './locale'
 
-export type Locale = 'ru' | 'en'
+export type { Locale } from './locale'
 
-type I18n = { locale: Locale; setLocale: (locale: Locale) => void; toggleLocale: () => void }
+type TranslationValues = Record<string, string | number>
+type I18n = {
+  locale: Locale
+  setLocale: (locale: Locale) => void
+  toggleLocale: () => void
+  t: (key: string, values?: TranslationValues) => string
+}
 
 const I18nContext = createContext<I18n | null>(null)
-const storageKey = 'statzavod.locale.v1'
+const cyrillicPattern = /[\u0400-\u052f\u2de0-\u2dff\ua640-\ua69f]/
 
-// These translations cover text that is currently rendered by the Russian-first
-// application. New interface strings should use the locale-aware components below.
+// Russian source strings are stable translation keys during the incremental i18n
+// migration. UI components must render them through t() instead of editing the DOM.
 const en: Record<string, string> = {
   'Загрузка…': 'Loading…', 'Загружаем статистику…': 'Loading statistics…', 'Загружаем список…': 'Loading list…',
   'Проверяем сессию…': 'Checking session…', 'Проверяем подключения…': 'Checking connections…',
@@ -18,11 +26,16 @@ const en: Record<string, string> = {
   'Создайте первого креатора, чтобы подключить аккаунты.': 'Create your first creator to connect accounts.',
   'Синхронизация': 'Synchronization', 'В норме': 'Healthy', 'Проверка': 'Checking', 'Задач ожидает:': 'Pending tasks:',
   'Сбор запустится автоматически после подключения платформы.': 'Collection starts automatically after a platform is connected.',
+  'Подключите платформенные аккаунты для сбора данных.': 'Connect platform accounts to start collecting data.',
+  'Синхронизация работает': 'Synchronization is working', 'Аккаунт требует повторного подключения': 'The account must be reconnected',
+  'Нет активного OAuth-подключения': 'There is no active OAuth connection', 'Авторизация недействительна': 'Authorization is invalid',
+  'Токен истёк': 'The token has expired', 'Срок действия токена скоро закончится': 'The token will expire soon',
+  'Ожидает первой синхронизации': 'Waiting for the first synchronization', 'Instagram через Facebook': 'Instagram via Facebook',
   'Линейный график появится, когда будут собраны минимум две точки данных.': 'A line chart will appear after at least two data points are collected.',
-  'Вход в систему': 'Sign in', 'Email': 'Email', 'Пароль': 'Password', 'Войти': 'Sign in',
-	'Обзор': 'Overview', 'Компании': 'Companies', 'Креативы': 'Creative assets', 'Выйти': 'Sign out', 'В РАБОТЕ': 'IN PROGRESS',
+  'Вход в систему': 'Sign in', 'Email': 'Email', 'Пароль': 'Password', 'Войти': 'Sign in', 'Не удалось войти': 'Could not sign in',
+	'СТАТЗАВОД': 'STATZAVOD', 'Обзор': 'Overview', 'Компании': 'Companies', 'Креативы': 'Creative assets', 'Выйти': 'Sign out', 'В РАБОТЕ': 'IN PROGRESS',
   'Регистрация': 'Registration', 'Создайте рабочий аккаунт для команды.': 'Create a workspace account for your team.',
-  'Рабочий email': 'Work email', 'Повторите пароль': 'Confirm password', 'Зарегистрироваться': 'Register',
+  'Рабочий email': 'Work email', 'Повторите пароль': 'Confirm password', 'Не менее 12 символов': 'At least 12 characters', 'Зарегистрироваться': 'Register',
   'Сервис находится в стадии beta-версии. Регистрация сейчас доступна только по приглашению.': 'The service is in beta. Registration is currently invitation-only.',
   'Отчёты и сравнения': 'Reports and comparisons', 'Аналитика': 'Analytics',
   'Соберите статистику по одному или нескольким креаторам за нужный период.': 'Collect metrics for one or more creators for the selected period.',
@@ -46,6 +59,8 @@ const en: Record<string, string> = {
   'НОВАЯ КАРТОЧКА': 'NEW PROFILE', 'Закрыть': 'Close', 'Имя': 'First name', 'Фамилия': 'Last name', 'Отчество': 'Middle name', 'Отображаемое имя': 'Display name',
   'Если не указать — сформируется автоматически': 'Generated automatically when left empty', 'Внутренний комментарий': 'Internal note', 'Отмена': 'Cancel', 'Создаём…': 'Creating…', 'Создать креатора': 'Create creator',
   'Принять приглашение': 'Accept invitation', 'Новый пароль': 'New password', 'Активировать доступ': 'Activate access', 'Ко входу': 'Back to sign in',
+  'Ссылка-приглашение не содержит токен.': 'The invitation link does not contain a token.', 'Аккаунт {email} активирован. Теперь можно войти.': 'Account {email} has been activated. You can now sign in.', 'Не удалось принять приглашение': 'Could not accept the invitation',
+  'Раздел готов к подключению': 'This section is ready to be connected', 'Базовый API и навигация уже подготовлены. Следующий шаг — подключить данные платформы и наполнить экран.': 'The core API and navigation are ready. Next, connect platform data and populate this screen.',
   'Система': 'System', 'АДМИНИСТРИРОВАНИЕ': 'ADMINISTRATION', 'Состояние синхронизации и очередей.': 'Synchronization and queue status.', 'Статус scheduler': 'Scheduler status',
   'КОНТЕНТ': 'CONTENT', 'Все обнаруженные видео и их последние показатели.': 'All discovered videos and their latest metrics.', 'Публикаций:': 'Publications:',
   'У выбранной компании публикаций пока нет.': 'The selected company has no publications yet.', 'Публикации появятся после подключения аккаунта и первого сбора данных.': 'Publications will appear after an account is connected and data is collected for the first time.',
@@ -69,6 +84,7 @@ const en: Record<string, string> = {
   'ОБЩИЙ ДОСТУП КОМПАНИИ': 'SHARED COMPANY ACCESS', 'Этот аккаунт управляет сообществами креаторов. Подключите его один раз через VK ID — статистика будет собираться из сообществ, указанных в карточках креаторов.': 'This account manages creator communities. Connect it once through VK ID and statistics will be collected from the communities listed in creator profiles.',
   'VK ID ещё не подключён': 'VK ID not connected yet', 'Сообществ назначено:': 'Assigned communities:', 'Ошибка синхронизации:': 'Synchronization error:', 'Последняя успешная синхронизация:': 'Last successful synchronization:', 'Первая синхронизация ещё не завершена.': 'The first synchronization has not completed yet.',
   'Ставим в очередь…': 'Queuing…', 'Синхронизация запрошена': 'Synchronization requested', 'Синхронизировать сейчас': 'Synchronize now', 'Данные общего доступа для команды': 'Shared access details for the team', 'Логин и пароль': 'Login and password', 'Только номер телефона': 'Phone number only',
+  'Отвязать VK ID': 'Disconnect VK ID', 'Отвязать VK ID?': 'Disconnect VK ID?', 'Доступ VK будет отозван, а новые синхронизации сообществ остановятся. Уже собранные публикации и метрики сохранятся.': 'VK access will be revoked and new community synchronizations will stop. Previously collected publications and metrics will be kept.', 'VK ID отвязан. Собранные данные сохранены.': 'VK ID was disconnected. Collected data was kept.',
   'Логин': 'Login', 'Телефон': 'Phone', 'Сохранён — введите только для замены': 'Saved — enter only to replace', 'Введите пароль': 'Enter password', 'Показать': 'Show', 'Необязательно': 'Optional', 'Номер телефона': 'Phone number', 'Сохраняем…': 'Saving…', 'Сохранить VK': 'Save VK',
   'Карточка креатора': 'Creator profile', 'КАРТОЧКА КРЕАТОРА': 'CREATOR PROFILE', 'Контакты': 'Contacts', 'Дополнительные способы связи.': 'Additional ways to get in touch.', 'Добавить': 'Add',
   'Канал и YouTube Analytics': 'Channel and YouTube Analytics', 'Профиль, Reels и Insights': 'Profile, Reels, and Insights', 'Профиль и опубликованные видео': 'Profile and published videos',
@@ -79,67 +95,79 @@ const en: Record<string, string> = {
   'Общий аккаунт фирмы': 'Shared company account', 'Изменить': 'Edit', 'Загружаем корпоративный доступ…': 'Loading shared company access…', 'Не удалось загрузить VK-доступ.': 'Could not load VK access.', 'Аккаунт фирмы': 'Company account', 'Не выбран': 'Not selected',
   'Перенесите в общий аккаунт фирмы': 'Move to the shared company account', 'Сохранено — введите для замены': 'Saved — enter to replace', 'Не заполнено': 'Not filled in', 'Скрыть': 'Hide',
   'Официальные OAuth-подключения для автоматического сбора статистики.': 'Official OAuth connections for automatic statistics collection.', 'Нужны OAuth-реквизиты': 'OAuth credentials are required', 'Нет подключений': 'No connections', 'Через Facebook · коллаборации': 'Via Facebook · collaborations',
-  'Аккаунтов:': 'Accounts:', 'синхронизация': 'synchronized', 'Удалить подключение': 'Delete connection', 'Карточка не показывается в рабочих списках и на дашборде': 'This profile is hidden from active lists and the dashboard',
+  'Аккаунтов:': 'Accounts:', 'синхронизация': 'synchronized', 'Удалить подключение': 'Delete connection', 'Отвязать аккаунт': 'Disconnect account', 'Карточка не показывается в рабочих списках и на дашборде': 'This profile is hidden from active lists and the dashboard',
   'Восстанавливаем…': 'Restoring…', 'Восстановить': 'Restore', 'В архив': 'Archive', 'Открыть Telegram': 'Open Telegram', 'Перенести креатора в архив?': 'Move creator to archive?',
   'Карточка исчезнет из рабочих списков и дашборда. Профиль, доступы, статистика и история изменений сохранятся — креатора можно восстановить в любой момент.': 'The profile will disappear from active lists and the dashboard. The profile, access, statistics, and change history will be kept and can be restored at any time.',
   'Переносим…': 'Moving…', 'Перенести в архив': 'Move to archive',
   'Подключения платформ': 'Platform connections', 'Подключить': 'Connect', 'Аккаунты ещё не подключены.': 'No accounts are connected yet.',
   'Удалить подключение?': 'Delete connection?', 'Доступ платформы будет отозван. Аккаунт, публикации, метрики и задания синхронизации будут удалены без возможности восстановления.': 'Platform access will be revoked. The account, publications, metrics, and synchronization tasks will be permanently deleted.',
+  'Отвязать аккаунт?': 'Disconnect account?', 'Доступ платформы будет отозван, а новые синхронизации остановятся. Уже собранные публикации и метрики сохранятся.': 'Platform access will be revoked and new synchronizations will stop. Previously collected publications and metrics will be kept.', 'Отвязываем…': 'Disconnecting…', 'Отвязать': 'Disconnect', 'отвязан': 'disconnected', 'Подключение отозвано; собранные данные сохранены': 'Access was revoked; collected data was kept', 'Не удалось отвязать аккаунт.': 'Could not disconnect the account.',
   'Удаляем…': 'Deleting…', 'Удалить всё': 'Delete all', 'подключён': 'connected', 'Доступ к данным добавлен': 'Data access added', 'удалён': 'deleted', 'Подключение и собранные данные удалены': 'The connection and collected data were deleted',
+  'ОТЧЁТЫ И СРАВНЕНИЯ': 'REPORTS AND COMPARISONS', 'Платформа': 'Platform', 'Показатель': 'Metric', 'За период:': 'For the period:',
+  'Сравнение показателей креаторов': 'Creator metric comparison', 'публикаций по дням': 'publications by day', 'по платформам': 'by platform', 'Нет данных по показателю': 'No data for this metric', 'публикац.': 'publications',
+  'креатор': 'creator', 'креаторов': 'creators', 'с истекающим токеном': 'with an expiring token', 'Токен до': 'Token until', 'Задач ожидает': 'Pending tasks',
+  'ER — коэффициент вовлечённости: (реакции + комментарии + репосты) ÷ просмотры × 100%. Чем выше показатель, тем активнее аудитория взаимодействует с контентом.': 'ER is the engagement rate: (reactions + comments + shares) ÷ views × 100%. A higher rate means the audience engages more actively with the content.',
+  'Всё ок': 'All good', 'В работе': 'In progress', 'Подключены:': 'Connected:', 'Не удалось получить креаторов:': 'Could not load creators:', 'Не удалось загрузить дашборд:': 'Could not load the dashboard:',
+  'Удалить': 'Delete', 'Архивируем…': 'Archiving…', 'Удалить навсегда': 'Delete permanently', 'Открываем…': 'Opening…', 'Переподключить VK ID': 'Reconnect VK ID',
+  'Компания и её настройки VK будут удалены навсегда. Креаторы перейдут в категорию «Без компании», а их карточки и статистика сохранятся.': 'The company and its VK settings will be permanently deleted. Creators will move to “No company”, while their profiles and statistics will be preserved.',
+  'Доступ подтверждён': 'Access confirmed', 'разрешений:': 'permissions:', 'Доступ:': 'Access:', 'ещё': 'more', 'Общий': 'Shared',
+  'АРХИВ ИЗМЕНЕНИЙ': 'CHANGE HISTORY', 'История': 'History', 'Закрыть историю': 'Close history', 'Загружаем историю…': 'Loading history…', 'Не удалось загрузить историю:': 'Could not load history:',
+  'Изменений пока нет': 'No changes yet', 'Здесь появятся прежние и новые значения после следующего редактирования.': 'Previous and new values will appear here after the next edit.', 'Было': 'Before', 'Стало': 'After',
+  'Профиль креатора': 'Creator profile', 'Основные данные и быстрые контакты.': 'Core details and quick contacts.', 'Полное имя': 'Full name', 'Не назначена': 'Not assigned', 'Редактировать': 'Edit', 'Сохранить': 'Save',
+  'Работы по креатору': 'Creator work', 'Текущее состояние карточки и задачи, которые требуют внимания.': 'Current profile status and tasks that need attention.', 'По креатору сейчас ничего делать не нужно.': 'No action is currently needed for this creator.',
+  'Что нужно исправить': 'What needs to be fixed', 'Опишите, что не так и какие работы нужны': 'Describe the issue and the work required', 'Что сейчас в работе': 'What is currently in progress', 'Опишите задачу, которую вы взяли в работу': 'Describe the task you are working on', 'Комментарий': 'Comment', 'Нет комментария': 'No comment',
+  'Корпоративный VK не выбран': 'Corporate VK is not selected', 'Выберите общий аккаунт фирмы и вставьте ссылку на сообщество этого креатора.': 'Select the shared company account and paste the link to this creator’s community.', 'Настроить VK у компании →': 'Set up VK for the company →',
+  'Сначала': 'First', 'настройте общий VK-аккаунт у компании': 'set up the shared VK account for the company', 'Аккаунт, которому выдан доступ': 'Account with granted access', 'Сообщество': 'Community', 'Способ входа': 'Sign-in method', 'По номеру телефона': 'By phone number', 'Скопировать': 'Copy',
+  'АРХИВ': 'ARCHIVE', 'Аккаунт': 'Account', 'Доступы и аккаунты': 'Access and accounts', 'Подключение': 'Connection', 'аккаунта': 'account', 'не завершено:': 'was not completed:',
+  'Все данные, доступы и история сохранены.': 'All data, access details, and history are preserved.', 'Данные из рабочей таблицы. Секреты зашифрованы и раскрываются только администратору.': 'Data from the working table. Secrets are encrypted and can only be revealed by an administrator.',
+  'Загружаем доступы…': 'Loading access details…', 'Загружаем карточку креатора…': 'Loading creator profile…', 'Загружаем подключения…': 'Loading connections…', 'Закрыть уведомление': 'Close notification',
+  'Не удалось восстановить карточку:': 'Could not restore the profile:', 'Не удалось перенести карточку:': 'Could not archive the profile:', 'Перенесена': 'Moved', 'Редактировать доступы': 'Edit access details',
+  'Нужна Facebook Page, связанная с профессиональным Instagram': 'A Facebook Page linked to the professional Instagram account is required',
+  'VK · старые данные': 'VK · legacy data', 'Связь Instagram со страницей Facebook': 'Instagram connection to a Facebook Page', 'Связанный Instagram-аккаунт': 'Linked Instagram account', 'Доступ к страницам бизнес-портфолио': 'Business portfolio page access', 'Профиль': 'Profile',
+  'Корпоративный аккаунт': 'Corporate account', 'Сообщество креатора': 'Creator community', 'Аккаунт с доступом': 'Account with access', 'логин': 'login', 'пароль': 'password', 'телефон': 'phone',
+  'Не удалось создать креатора': 'Could not create the creator', 'Не удалось удалить данные платформы.': 'Could not delete the platform data.',
 }
 
-function translateText(value: string): string {
-  const direct = en[value.trim()]
-  if (direct) return value.replace(value.trim(), direct)
-  return value
-    .replace(/^Подключены: /, 'Connected: ')
-    .replace(/^В архиве с /, 'Archived since ')
-    .replace(/^Найдено: /, 'Found: ')
-    .replace(/^Выбрано: /, 'Selected: ')
-    .replace(/^Задач ожидает: /, 'Pending tasks: ')
-    .replace(/^Токен до /, 'Token until ')
-}
-
-function localizeNode(node: Node) {
-  if (node.nodeType === Node.TEXT_NODE) {
-    const next = translateText(node.textContent ?? '')
-    if (next !== node.textContent) node.textContent = next
-    return
-  }
-  if (!(node instanceof HTMLElement)) return
-  for (const attribute of ['placeholder', 'aria-label', 'title']) {
-    const value = node.getAttribute(attribute)
-    if (value) node.setAttribute(attribute, translateText(value))
-  }
-  node.childNodes.forEach(localizeNode)
-}
-
-function DomLocalizer({ locale }: { locale: Locale }) {
-  useEffect(() => {
-    document.documentElement.lang = locale
-    if (locale === 'ru') return
-    localizeNode(document.body)
-    const observer = new MutationObserver(records => records.forEach(record => record.addedNodes.forEach(localizeNode)))
-    observer.observe(document.body, { childList: true, subtree: true })
-    return () => observer.disconnect()
-  }, [locale])
-  return null
+function interpolate(template: string, values?: TranslationValues) {
+  if (!values) return template
+  return template.replace(/\{(\w+)\}/g, (match, key: string) => key in values ? String(values[key]) : match)
 }
 
 export function I18nProvider({ children }: { children: ReactNode }) {
-  const [locale, setLocaleState] = useState<Locale>(() => {
-    const saved = localStorage.getItem(storageKey)
-    return saved === 'en' || saved === 'ru' ? saved : location.pathname.startsWith('/en') ? 'en' : 'ru'
-  })
-  const setLocale = (next: Locale) => {
-    if (next === locale) return
-    localStorage.setItem(storageKey, next)
-    // Existing pages are Russian-first React components. Reloading from the
-    // source markup makes changing back from English lossless as well.
-    window.location.reload()
-  }
-  const value = useMemo(() => ({ locale, setLocale, toggleLocale: () => setLocale(locale === 'ru' ? 'en' : 'ru') }), [locale])
-  return <I18nContext.Provider value={value}><DomLocalizer locale={locale} />{children}</I18nContext.Provider>
+  const { pathname } = useLocation()
+  const [locale, setLocaleState] = useState<Locale>(() => publicPathLocale(pathname) ?? readStoredLocale() ?? 'ru')
+
+  const setLocale = useCallback((next: Locale) => {
+    storeLocale(next)
+    setLocaleState(next)
+  }, [])
+
+  useLayoutEffect(() => {
+    const routeLocale = publicPathLocale(pathname)
+    if (routeLocale) setLocale(routeLocale)
+  }, [pathname, setLocale])
+
+  useLayoutEffect(() => {
+    document.documentElement.lang = locale
+    document.title = locale === 'en' ? 'Statzavod' : 'Статзавод'
+  }, [locale])
+
+  const t = useCallback((key: string, values?: TranslationValues) => {
+    let template = key
+    if (locale === 'en') {
+      template = en[key] ?? key
+      if (template === key && key.startsWith('Ошибок синхронизации подряд:')) {
+        template = key.replace('Ошибок синхронизации подряд:', 'Consecutive synchronization failures:')
+      } else if (template === key && cyrillicPattern.test(key)) {
+        template = 'Information is unavailable in English.'
+      }
+    }
+    return interpolate(template, values)
+  }, [locale])
+
+  const toggleLocale = useCallback(() => setLocale(locale === 'ru' ? 'en' : 'ru'), [locale, setLocale])
+  const value = useMemo(() => ({ locale, setLocale, toggleLocale, t }), [locale, setLocale, t, toggleLocale])
+  return <I18nContext.Provider value={value}>{children}</I18nContext.Provider>
 }
 
 export function useI18n() {

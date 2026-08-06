@@ -3,9 +3,11 @@ package httpserver
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/statzavod/statzavod/internal/config"
+	crypt "github.com/statzavod/statzavod/internal/crypto"
 )
 
 func TestCompleteYouTubeOAuth(t *testing.T) {
@@ -108,5 +110,71 @@ func TestCompleteVKOAuth(t *testing.T) {
 	}
 	if token.AccessToken != "access" || token.RefreshToken != "refresh" || profile.ExternalID != "7" || profile.Username != "ivan" {
 		t.Fatalf("unexpected result: %#v %#v", token, profile)
+	}
+}
+
+func TestPlatformRevocationToken(t *testing.T) {
+	envelope, err := crypt.New(make([]byte, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	accessCipher, accessNonce, err := envelope.Encrypt([]byte("access-token"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	refreshCipher, refreshNonce, err := envelope.Encrypt([]byte("refresh-token"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{envelope: envelope}
+
+	tests := []struct {
+		name     string
+		platform string
+		refresh  []byte
+		nonce    []byte
+		want     string
+	}{
+		{name: "YouTube prefers refresh token", platform: "YOUTUBE", refresh: refreshCipher, nonce: refreshNonce, want: "refresh-token"},
+		{name: "YouTube falls back to access token", platform: "YOUTUBE", want: "access-token"},
+		{name: "TikTok uses access token", platform: "TIKTOK", refresh: refreshCipher, nonce: refreshNonce, want: "access-token"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := s.platformRevocationToken(platformRevocationConnection{
+				platform:      test.platform,
+				accessCipher:  accessCipher,
+				accessNonce:   accessNonce,
+				refreshCipher: test.refresh,
+				refreshNonce:  test.nonce,
+			})
+			if got != test.want {
+				t.Fatalf("platformRevocationToken() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestRevokeYouTubeTokenAcceptsEmptyResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/revoke" {
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+		if !strings.HasPrefix(r.Header.Get("Content-Type"), "application/x-www-form-urlencoded") {
+			t.Fatalf("unexpected content type %q", r.Header.Get("Content-Type"))
+		}
+		if err := r.ParseForm(); err != nil {
+			t.Fatal(err)
+		}
+		if got := r.Form.Get("token"); got != "refresh-token" {
+			t.Fatalf("token = %q, want refresh-token", got)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	s := &Server{config: config.Config{YouTubeOAuthBase: server.URL}}
+	if err := s.revokePlatform(t.Context(), "YOUTUBE", "refresh-token"); err != nil {
+		t.Fatal(err)
 	}
 }

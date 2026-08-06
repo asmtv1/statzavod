@@ -2,12 +2,31 @@ package httpserver
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
+
+type recordingInstagramDeletionTx struct {
+	queries              []string
+	platformRowsAffected int64
+}
+
+func (tx *recordingInstagramDeletionTx) Exec(_ context.Context, sql string, _ ...any) (pgconn.CommandTag, error) {
+	tx.queries = append(tx.queries, strings.Join(strings.Fields(sql), " "))
+	if strings.Contains(sql, "DELETE FROM platform_accounts") {
+		return pgconn.NewCommandTag("DELETE " + fmt.Sprint(tx.platformRowsAffected)), nil
+	}
+	return pgconn.NewCommandTag("DELETE 1"), nil
+}
 
 func TestParseInstagramTimestamp(t *testing.T) {
 	tests := []struct {
@@ -87,5 +106,86 @@ func TestFetchInstagramMediaInsightsBatchesMetrics(t *testing.T) {
 	}
 	if got.Likes == nil || *got.Likes != 11 || got.Comments == nil || *got.Comments != 3 {
 		t.Fatalf("media counters were not preserved: %+v", got)
+	}
+}
+
+func TestDeleteInstagramAccountDataOrdersSyncCleanupBeforeTarget(t *testing.T) {
+	tx := &recordingInstagramDeletionTx{platformRowsAffected: 1}
+	if err := deleteInstagramAccountDataInTx(t.Context(), tx, "account-id", "organization-id"); err != nil {
+		t.Fatal(err)
+	}
+	wantOrder := []string{
+		"DELETE FROM sync_runs",
+		"DELETE FROM sync_targets",
+		"DELETE FROM creator_account_assignments",
+		"DELETE FROM publications",
+		"DELETE FROM platform_accounts",
+		"INSERT INTO audit_logs",
+	}
+	if len(tx.queries) != len(wantOrder) {
+		t.Fatalf("query count = %d, want %d: %#v", len(tx.queries), len(wantOrder), tx.queries)
+	}
+	for index, fragment := range wantOrder {
+		if !strings.Contains(tx.queries[index], fragment) {
+			t.Fatalf("query %d = %q, want fragment %q", index, tx.queries[index], fragment)
+		}
+	}
+	if !strings.Contains(tx.queries[2], "account.organization_id=$2") || !strings.Contains(tx.queries[3], "organization_id=$2") || !strings.Contains(tx.queries[4], "organization_id=$2") {
+		t.Fatalf("tenant filters are missing from deletion queries: %#v", tx.queries)
+	}
+}
+
+func TestDeleteInstagramAccountDataStopsBeforeAuditWhenAccountIsAbsent(t *testing.T) {
+	tx := &recordingInstagramDeletionTx{platformRowsAffected: 0}
+	err := deleteInstagramAccountDataInTx(t.Context(), tx, "account-id", "organization-id")
+	if !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("error = %v, want pgx.ErrNoRows", err)
+	}
+	if len(tx.queries) != 5 {
+		t.Fatalf("query count = %d, want 5 without audit insert: %#v", len(tx.queries), tx.queries)
+	}
+}
+
+func TestDeleteInstagramAccountCopiesDeletesEveryTenantCopy(t *testing.T) {
+	accounts := []instagramAccountCopy{
+		{AccountID: "account-a", OrganizationID: "organization-a"},
+		{AccountID: "account-b", OrganizationID: "organization-b"},
+		{AccountID: "account-c", OrganizationID: "organization-c"},
+	}
+	deleted := make([]instagramAccountCopy, 0, len(accounts))
+	err := deleteInstagramAccountCopies(t.Context(), accounts, func(_ context.Context, accountID, organizationID string) error {
+		deleted = append(deleted, instagramAccountCopy{AccountID: accountID, OrganizationID: organizationID})
+		if accountID == "account-b" {
+			// A concurrent retry may observe one copy as already gone. The
+			// remaining tenant copies must still be deleted.
+			return pgx.ErrNoRows
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(deleted, accounts) {
+		t.Fatalf("deleted copies = %#v, want %#v", deleted, accounts)
+	}
+}
+
+func TestInstagramDeletionRequestOwnerAvoidsArbitraryTenantForMultipleCopies(t *testing.T) {
+	accountID, organizationID := instagramDeletionRequestOwner(nil)
+	if accountID != nil || organizationID != nil {
+		t.Fatalf("empty owner = %#v, %#v; want nil, nil", accountID, organizationID)
+	}
+
+	accountID, organizationID = instagramDeletionRequestOwner([]instagramAccountCopy{{AccountID: "account-a", OrganizationID: "organization-a"}})
+	if accountID != "account-a" || organizationID != "organization-a" {
+		t.Fatalf("single owner = %#v, %#v", accountID, organizationID)
+	}
+
+	accountID, organizationID = instagramDeletionRequestOwner([]instagramAccountCopy{
+		{AccountID: "account-a", OrganizationID: "organization-a"},
+		{AccountID: "account-b", OrganizationID: "organization-b"},
+	})
+	if accountID != nil || organizationID != nil {
+		t.Fatalf("multi-tenant owner = %#v, %#v; want nil, nil", accountID, organizationID)
 	}
 }

@@ -4,7 +4,7 @@ import styles from './AnalyticsPage.module.scss'
 import { useI18n } from '../../shared/i18n/I18nProvider'
 
 export function ComparisonChart({ reports }: { reports: CreatorAnalytics[] }) {
-  const { locale } = useI18n()
+  const { locale, t } = useI18n()
   const container = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -23,15 +23,15 @@ export function ComparisonChart({ reports }: { reports: CreatorAnalytics[] }) {
         xAxis:{ type:'category', data:reports.map(report => report.creatorName), axisLabel:{ color:'#928f87', overflow:'truncate', width:110 }, axisLine:{ lineStyle:{ color:'rgba(243,238,229,.1)' } } },
         yAxis:{ type:'value', min:0, axisLabel:{ color:'#928f87' }, splitLine:{ lineStyle:{ color:'rgba(243,238,229,.08)' } } },
         series:[
-          { name:locale === 'en' ? 'Views' : 'Просмотры', type:'bar', data:reports.map(report => metric(report,'views')), itemStyle:{ color:'#9ce5bd', borderRadius:[5,5,0,0] }, barMaxWidth:34 },
-          { name:locale === 'en' ? 'Reactions' : 'Реакции', type:'bar', data:reports.map(report => metric(report,'likes')), itemStyle:{ color:'#e4b667', borderRadius:[5,5,0,0] }, barMaxWidth:34 },
+          { name:t('Просмотры'), type:'bar', data:reports.map(report => metric(report,'views')), itemStyle:{ color:'#9ce5bd', borderRadius:[5,5,0,0] }, barMaxWidth:34 },
+          { name:t('Реакции'), type:'bar', data:reports.map(report => metric(report,'likes')), itemStyle:{ color:'#e4b667', borderRadius:[5,5,0,0] }, barMaxWidth:34 },
         ],
       })
     })
     const resize = () => chart?.resize()
     window.addEventListener('resize', resize)
     return () => { cancelled = true; window.removeEventListener('resize', resize); chart?.dispose() }
-  }, [locale, reports])
+  }, [locale, reports, t])
 
-  return <div ref={container} className={styles.chart} aria-label={locale === 'en' ? 'Creator metric comparison' : 'Сравнение показателей креаторов'}/>
+  return <div ref={container} className={styles.chart} aria-label={t('Сравнение показателей креаторов')}/>
 }

@@ -248,7 +248,7 @@ export function LegalPage({ kind, lang = 'ru' }: { kind: Kind; lang?: Language }
           <Link className={styles.brand} to={prefix || '/'}>STATZAVOD</Link>
           <div className={styles.headerActions}>
             <Link className={styles.language} to={`${lang === 'ru' ? '/en' : ''}${paths[kind]}`}>{lang === 'ru' ? 'EN' : 'RU'}</Link>
-            <Link className={styles.close} to="/" aria-label={lang === 'ru' ? 'Закрыть документ' : 'Close document'}>× <span>{lang === 'ru' ? 'Закрыть' : 'Close'}</span></Link>
+            <Link className={styles.close} to={prefix || '/'} aria-label={lang === 'ru' ? 'Закрыть документ' : 'Close document'}>× <span>{lang === 'ru' ? 'Закрыть' : 'Close'}</span></Link>
           </div>
         </header>
         <nav className={styles.documentNav} aria-label={lang === 'ru' ? 'Юридические документы' : 'Legal documents'}>

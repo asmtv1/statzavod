@@ -268,15 +268,16 @@ func normalizeVKCommunityURL(value string) (string, bool) {
 		value = "https://" + value
 	}
 	parsed, err := url.Parse(value)
-	if err != nil || parsed.Scheme != "https" {
+	if err != nil || parsed.Scheme != "https" || parsed.User != nil || parsed.Port() != "" {
 		return "", false
 	}
 	host := strings.ToLower(strings.TrimPrefix(parsed.Hostname(), "www."))
-	path := strings.Trim(parsed.EscapedPath(), "/")
-	if (host != "vk.ru" && host != "vk.com") || path == "" || strings.Contains(path, "/") {
+	decodedPath := strings.Trim(parsed.Path, "/")
+	escapedPath := strings.Trim(parsed.EscapedPath(), "/")
+	if (host != "vk.ru" && host != "vk.com") || decodedPath == "" || escapedPath == "" || decodedPath == "." || decodedPath == ".." || strings.Contains(decodedPath, "/") {
 		return "", false
 	}
-	return "https://" + host + "/" + path, true
+	return "https://" + host + "/" + escapedPath, true
 }
 
 func (s *Server) getCreatorVKAccess(w http.ResponseWriter, r *http.Request) {

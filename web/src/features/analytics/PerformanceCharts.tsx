@@ -33,22 +33,20 @@ const platformColors: Record<string, string> = {
 }
 const fallbackColors = ['#e4b667', '#a69ce5', '#8fd7d1', '#d99b75']
 
-const labels = (locale: 'ru'|'en'): Record<Metric, string> => locale === 'en'
-  ? { views: 'Views', likes: 'Reactions', publications: 'Publications' }
-  : { views: 'Просмотры', likes: 'Реакции', publications: 'Публикации' }
+const labels = (t: (value: string) => string): Record<Metric, string> => ({ views: t('Просмотры'), likes: t('Реакции'), publications: t('Публикации') })
 
 function parseDate(value: string) {
   return new Date(`${value}T00:00:00`)
 }
 
-function MetricSwitch({ value, onChange, locale, metrics = ['views', 'likes', 'publications'] }: {
+function MetricSwitch({ value, onChange, metrics = ['views', 'likes', 'publications'] }: {
   value: Metric
   onChange: (metric: Metric) => void
-  locale: 'ru'|'en'
   metrics?: Metric[]
 }) {
-  const metricLabels = labels(locale)
-  return <div className={styles.metricSwitch} aria-label={locale === 'en' ? 'Metric' : 'Показатель'}>
+  const { t } = useI18n()
+  const metricLabels = labels(t)
+  return <div className={styles.metricSwitch} aria-label={t('Показатель')}>
     {metrics.map(metric => <button
       aria-pressed={value === metric}
       className={value === metric ? styles.metricActive : undefined}
@@ -60,12 +58,12 @@ function MetricSwitch({ value, onChange, locale, metrics = ['views', 'likes', 'p
 }
 
 export function DailyPerformanceChart({ data }: { data: DailyAnalyticsPoint[] }) {
-  const { locale } = useI18n()
+  const { locale, t } = useI18n()
   const container = useRef<HTMLDivElement>(null)
   const [metric, setMetric] = useState<Metric>('views')
   const number = new Intl.NumberFormat(locale === 'en' ? 'en-US' : 'ru-RU')
   const shortDate = new Intl.DateTimeFormat(locale === 'en' ? 'en-US' : 'ru-RU', { day: 'numeric', month: 'short' })
-  const metricLabels = labels(locale)
+  const metricLabels = labels(t)
 
   useEffect(() => {
     if (!container.current || !data.length) return
@@ -124,20 +122,20 @@ export function DailyPerformanceChart({ data }: { data: DailyAnalyticsPoint[] })
   const total = data.reduce((sum, point) => sum + point[metric], 0)
   return <>
     <div className={styles.chartToolbar}>
-      <MetricSwitch value={metric} onChange={setMetric} locale={locale}/>
-      <span>{locale === 'en' ? 'For the period:' : 'За период:'} <strong>{number.format(total)}</strong></span>
+      <MetricSwitch value={metric} onChange={setMetric}/>
+      <span>{t('За период:')} <strong>{number.format(total)}</strong></span>
     </div>
-    <div ref={container} className={styles.dailyChart} role="img" aria-label={`${metricLabels[metric]} публикаций по дням`}/>
+    <div ref={container} className={styles.dailyChart} role="img" aria-label={`${metricLabels[metric]} ${t('публикаций по дням')}`}/>
   </>
 }
 
 export function PlatformBreakdownChart({ data }: { data: PlatformAnalyticsPoint[] }) {
-  const { locale } = useI18n()
+  const { locale, t } = useI18n()
   const container = useRef<HTMLDivElement>(null)
   const [metric, setMetric] = useState<Metric>('views')
   const total = data.reduce((sum, point) => sum + point[metric], 0)
   const number = new Intl.NumberFormat(locale === 'en' ? 'en-US' : 'ru-RU')
-  const metricLabels = labels(locale)
+  const metricLabels = labels(t)
 
   useEffect(() => {
     if (!container.current || !data.length || !total) return
@@ -176,11 +174,11 @@ export function PlatformBreakdownChart({ data }: { data: PlatformAnalyticsPoint[
   }, [data, locale, metric, total])
 
   return <>
-    <MetricSwitch value={metric} onChange={setMetric} locale={locale}/>
+    <MetricSwitch value={metric} onChange={setMetric}/>
     {total ? <div className={styles.platformChartWrap}>
-      <div ref={container} className={styles.platformChart} role="img" aria-label={`${metricLabels[metric]} по платформам`}/>
+      <div ref={container} className={styles.platformChart} role="img" aria-label={`${metricLabels[metric]} ${t('по платформам')}`}/>
       <div className={styles.donutTotal} aria-hidden="true"><strong>{number.format(total)}</strong><span>{metricLabels[metric].toLowerCase()}</span></div>
-    </div> : <div className={styles.chartEmpty}>{locale === 'en' ? 'No data for this metric' : 'Нет данных по показателю'}</div>}
+    </div> : <div className={styles.chartEmpty}>{t('Нет данных по показателю')}</div>}
     <div className={styles.platformLegend}>
       {data.map((point, index) => {
         const value = point[metric]
@@ -188,7 +186,7 @@ export function PlatformBreakdownChart({ data }: { data: PlatformAnalyticsPoint[
         const color = platformColors[point.platform] ?? fallbackColors[index % fallbackColors.length]
         return <div key={point.platform}>
           <i style={{ backgroundColor: color }}/>
-          <span><b>{platformNames[point.platform] ?? point.platform}</b><small>{point.publications} {locale === 'en' ? 'publications' : 'публикац.'}</small></span>
+          <span><b>{platformNames[point.platform] ?? point.platform}</b><small>{point.publications} {t('публикац.')}</small></span>
           <strong>{number.format(value)} <small>{share}%</small></strong>
         </div>
       })}

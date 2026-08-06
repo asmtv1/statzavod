@@ -4,7 +4,7 @@ import styles from './ViewsChart.module.scss'
 import { useI18n } from '../../shared/i18n/I18nProvider'
 
 export function ViewsChart({ items }: Timeseries) {
-  const { locale } = useI18n()
+  const { locale, t } = useI18n()
   const container = useRef<HTMLDivElement>(null)
   useEffect(() => {
     if (!container.current || items.length < 2) return
@@ -20,6 +20,6 @@ export function ViewsChart({ items }: Timeseries) {
     window.addEventListener('resize', resize)
     return () => { cancelled = true; window.removeEventListener('resize', resize); chart?.dispose() }
   }, [items, locale])
-  if (items.length < 2) return <p className={styles.empty}>{locale === 'en' ? 'A line chart will appear after at least two data points are collected.' : 'Линейный график появится, когда будут собраны минимум две точки данных.'}</p>
-  return <div ref={container} className={styles.chart} aria-label={locale === 'en' ? 'Views trend' : 'Динамика просмотров'} />
+  if (items.length < 2) return <p className={styles.empty}>{t('Линейный график появится, когда будут собраны минимум две точки данных.')}</p>
+  return <div ref={container} className={styles.chart} aria-label={t('Динамика просмотров')} />
 }

@@ -38,6 +38,30 @@ func New(pool *pgxpool.Pool, c config.Config) *Server {
 	return &Server{pool: pool, config: c, envelope: envelope}
 }
 
+func englishRequest(r *http.Request) bool {
+	locale := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("locale")))
+	if locale == "" {
+		locale = strings.ToLower(strings.TrimSpace(r.Header.Get("Accept-Language")))
+	}
+	return locale == "en" || strings.HasPrefix(locale, "en-") || strings.HasPrefix(locale, "en,") || strings.HasPrefix(locale, "en;")
+}
+
+func localized(r *http.Request, russian, english string) string {
+	if englishRequest(r) {
+		return english
+	}
+	return russian
+}
+
+func containsCyrillic(value string) bool {
+	for _, character := range value {
+		if (character >= '\u0400' && character <= '\u052f') || (character >= '\u2de0' && character <= '\u2dff') || (character >= '\ua640' && character <= '\ua69f') {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Server) Router() http.Handler {
 	r := chi.NewRouter()
 	r.Use(s.requestID, s.cors, s.recoverer)
@@ -85,8 +109,8 @@ func (s *Server) Router() http.Handler {
 			r.With(s.require("ADMIN", "ANALYST")).Post("/creators/{id}/connections/{platform}/authorize", s.oauthAuthorize)
 			r.Get("/creators/{id}/connections", s.platformConnections)
 			r.Get("/integrations", s.integrationStatus)
-			r.With(s.require("ADMIN")).Delete("/platform-accounts/{id}/connection", s.disconnectPlatform)
-			r.With(s.require("ADMIN")).Delete("/platform-accounts/{id}/data", s.purgePlatformData)
+			r.With(s.require("ADMIN", "ANALYST")).Delete("/platform-accounts/{id}/connection", s.disconnectPlatform)
+			r.With(s.require("ADMIN", "ANALYST")).Delete("/platform-accounts/{id}/data", s.purgePlatformData)
 			r.With(s.require("ADMIN", "ANALYST")).Post("/platform-accounts/{id}/sync", s.requestAccountSync)
 			r.With(s.require("ADMIN", "ANALYST")).Post("/platform-accounts/{id}/pause", s.pausePlatformAccount)
 			r.With(s.require("ADMIN", "ANALYST")).Post("/platform-accounts/{id}/resume", s.resumePlatformAccount)
@@ -338,7 +362,7 @@ func (s *Server) createContact(w http.ResponseWriter, r *http.Request) {
 func (s *Server) listCreatorAccounts(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	p := r.Context().Value(principalKey).(principal)
-	rows, err := s.pool.Query(r.Context(), `SELECT a.id,a.platform,a.username,a.display_name,a.status,COALESCE(a.profile_url,'') FROM platform_accounts a JOIN creator_account_assignments x ON x.platform_account_id=a.id WHERE x.creator_id=$1 AND a.organization_id=$2 AND x.valid_to IS NULL ORDER BY a.platform,a.username`, id, p.OrganizationID)
+	rows, err := s.pool.Query(r.Context(), `SELECT a.id,a.platform,a.username,a.display_name,a.status,COALESCE(a.profile_url,'') FROM platform_accounts a JOIN creator_account_assignments x ON x.platform_account_id=a.id WHERE x.creator_id=$1 AND a.organization_id=$2 AND x.valid_to IS NULL AND a.status<>'DISCONNECTED' ORDER BY a.platform,a.username`, id, p.OrganizationID)
 	if err != nil {
 		problem(w, 500, "accounts failed", err.Error())
 		return
@@ -519,7 +543,7 @@ func (s *Server) summary(w http.ResponseWriter, r *http.Request) {
 		problem(w, 500, "summary failed", err.Error())
 		return
 	}
-	writeJSON(w, 200, map[string]any{"kpis": []map[string]any{{"key": "views", "label": "Просмотры", "value": views}, {"key": "likes", "label": "Реакции", "value": likes}, {"key": "publications", "label": "Публикации", "value": publications}, {"key": "creators", "label": "Креаторы", "value": creators}}, "freshness": map[string]string{"status": "partial", "message": "Подключите платформенные аккаунты для сбора данных."}})
+	writeJSON(w, 200, map[string]any{"kpis": []map[string]any{{"key": "views", "label": localized(r, "Просмотры", "Views"), "value": views}, {"key": "likes", "label": localized(r, "Реакции", "Reactions"), "value": likes}, {"key": "publications", "label": localized(r, "Публикации", "Publications"), "value": publications}, {"key": "creators", "label": localized(r, "Креаторы", "Creators"), "value": creators}}, "freshness": map[string]string{"status": "partial", "message": localized(r, "Подключите платформенные аккаунты для сбора данных.", "Connect platform accounts to start collecting data.")}})
 }
 func (s *Server) timeseries(w http.ResponseWriter, r *http.Request) {
 	p := r.Context().Value(principalKey).(principal)
@@ -593,7 +617,7 @@ func (s *Server) creatorAnalytics(w http.ResponseWriter, r *http.Request) {
 		}
 		items = append(items, map[string]any{"id": pid, "title": title, "platform": platform, "publishedAt": published, "views": pv, "likes": pl})
 	}
-	writeJSON(w, 200, map[string]any{"creatorId": id, "creatorName": name, "period": map[string]string{"from": from, "to": to}, "kpis": []map[string]any{{"key": "views", "label": "Просмотры", "value": views}, {"key": "likes", "label": "Реакции", "value": likes}, {"key": "comments", "label": "Комментарии", "value": comments}, {"key": "shares", "label": "Репосты", "value": shares}, {"key": "publications", "label": "Публикации", "value": publications}}, "publications": items})
+	writeJSON(w, 200, map[string]any{"creatorId": id, "creatorName": name, "period": map[string]string{"from": from, "to": to}, "kpis": []map[string]any{{"key": "views", "label": localized(r, "Просмотры", "Views"), "value": views}, {"key": "likes", "label": localized(r, "Реакции", "Reactions"), "value": likes}, {"key": "comments", "label": localized(r, "Комментарии", "Comments"), "value": comments}, {"key": "shares", "label": localized(r, "Репосты", "Shares"), "value": shares}, {"key": "publications", "label": localized(r, "Публикации", "Publications"), "value": publications}}, "publications": items})
 }
 
 func (s *Server) exportCreator(w http.ResponseWriter, r *http.Request) {
@@ -645,12 +669,12 @@ func (s *Server) exportCreator(w http.ResponseWriter, r *http.Request) {
 
 	f := excelize.NewFile()
 	defer func() { _ = f.Close() }()
-	sheet := "Сводка"
+	sheet := localized(r, "Сводка", "Summary")
 	f.SetSheetName("Sheet1", sheet)
-	_ = f.SetCellValue(sheet, "A1", "Отчёт по креаторам")
-	_ = f.SetCellValue(sheet, "A2", "Период")
+	_ = f.SetCellValue(sheet, "A1", localized(r, "Отчёт по креаторам", "Creator report"))
+	_ = f.SetCellValue(sheet, "A2", localized(r, "Период", "Period"))
 	_ = f.SetCellValue(sheet, "B2", from+" — "+to)
-	for column, value := range []string{"Креатор", "Просмотры", "Реакции", "Комментарии", "Репосты", "Публикации"} {
+	for column, value := range []string{localized(r, "Креатор", "Creator"), localized(r, "Просмотры", "Views"), localized(r, "Реакции", "Reactions"), localized(r, "Комментарии", "Comments"), localized(r, "Репосты", "Shares"), localized(r, "Публикации", "Publications")} {
 		_ = f.SetCellValue(sheet, string(rune('A'+column))+"4", value)
 	}
 
@@ -677,13 +701,14 @@ func (s *Server) exportCreator(w http.ResponseWriter, r *http.Request) {
 		rowNumber++
 	}
 
-	pubs, _ := f.NewSheet("Публикации")
-	_ = f.SetCellValue("Публикации", "A1", "Название")
-	_ = f.SetCellValue("Публикации", "B1", "Креатор")
-	_ = f.SetCellValue("Публикации", "C1", "Платформа")
-	_ = f.SetCellValue("Публикации", "D1", "Дата публикации")
-	_ = f.SetCellValue("Публикации", "E1", "Просмотры")
-	_ = f.SetCellValue("Публикации", "F1", "Реакции")
+	publicationsSheet := localized(r, "Публикации", "Publications")
+	pubs, _ := f.NewSheet(publicationsSheet)
+	_ = f.SetCellValue(publicationsSheet, "A1", localized(r, "Название", "Title"))
+	_ = f.SetCellValue(publicationsSheet, "B1", localized(r, "Креатор", "Creator"))
+	_ = f.SetCellValue(publicationsSheet, "C1", localized(r, "Платформа", "Platform"))
+	_ = f.SetCellValue(publicationsSheet, "D1", localized(r, "Дата публикации", "Publication date"))
+	_ = f.SetCellValue(publicationsSheet, "E1", localized(r, "Просмотры", "Views"))
+	_ = f.SetCellValue(publicationsSheet, "F1", localized(r, "Реакции", "Reactions"))
 	rows, err := s.pool.Query(r.Context(), `SELECT COALESCE(p.title,''),c.display_name,p.platform,p.published_at,COALESCE(s.views,0),COALESCE(s.likes,0) FROM publications p JOIN creators c ON c.id=p.creator_id LEFT JOIN LATERAL (SELECT views,likes FROM publication_metric_snapshots WHERE publication_id=p.id ORDER BY observed_at DESC LIMIT 1) s ON true`+where+` ORDER BY p.published_at DESC`, args...)
 	if err == nil {
 		defer rows.Close()
@@ -693,20 +718,20 @@ func (s *Server) exportCreator(w http.ResponseWriter, r *http.Request) {
 			var published time.Time
 			var pviews, plikes int64
 			if rows.Scan(&title, &creator, &platform, &published, &pviews, &plikes) == nil {
-				_ = f.SetCellValue("Публикации", "A"+fmt.Sprint(row), title)
-				_ = f.SetCellValue("Публикации", "B"+fmt.Sprint(row), creator)
-				_ = f.SetCellValue("Публикации", "C"+fmt.Sprint(row), platform)
-				_ = f.SetCellValue("Публикации", "D"+fmt.Sprint(row), published)
-				_ = f.SetCellValue("Публикации", "E"+fmt.Sprint(row), pviews)
-				_ = f.SetCellValue("Публикации", "F"+fmt.Sprint(row), plikes)
+				_ = f.SetCellValue(publicationsSheet, "A"+fmt.Sprint(row), title)
+				_ = f.SetCellValue(publicationsSheet, "B"+fmt.Sprint(row), creator)
+				_ = f.SetCellValue(publicationsSheet, "C"+fmt.Sprint(row), platform)
+				_ = f.SetCellValue(publicationsSheet, "D"+fmt.Sprint(row), published)
+				_ = f.SetCellValue(publicationsSheet, "E"+fmt.Sprint(row), pviews)
+				_ = f.SetCellValue(publicationsSheet, "F"+fmt.Sprint(row), plikes)
 				row++
 			}
 		}
 	}
 	_ = f.SetColWidth(sheet, "A", "F", 22)
-	_ = f.SetColWidth("Публикации", "A", "F", 22)
+	_ = f.SetColWidth(publicationsSheet, "A", "F", 22)
 	_ = f.SetPanes(sheet, &excelize.Panes{Freeze: true, YSplit: 4, TopLeftCell: "A5", ActivePane: "bottomLeft"})
-	_ = f.SetPanes("Публикации", &excelize.Panes{Freeze: true, YSplit: 1, TopLeftCell: "A2", ActivePane: "bottomLeft"})
+	_ = f.SetPanes(publicationsSheet, &excelize.Panes{Freeze: true, YSplit: 1, TopLeftCell: "A2", ActivePane: "bottomLeft"})
 	f.SetActiveSheet(pubs)
 	w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 	w.Header().Set("Content-Disposition", `attachment; filename="creator-report.xlsx"`)
@@ -731,7 +756,7 @@ func (s *Server) cors(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", s.config.CORSOrigin)
 		w.Header().Set("Access-Control-Allow-Credentials", "true")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Accept-Language")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return

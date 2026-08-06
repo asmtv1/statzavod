@@ -37,7 +37,7 @@ export type SyncAccount = {
 }
 export type ContentGroup = {id:string;name:string;status:string;creatorName:string;publicationCount:number}
 export class ApiError extends Error { constructor(public status:number, message:string) { super(message) } }
-export async function request<T>(path:string, options:RequestInit = {}): Promise<T> { const response=await fetch(`/api/v1${path}`, { credentials:'include', headers:{'Content-Type':'application/json', ...options.headers}, ...options }); if (!response.ok) { const error=await response.json().catch(()=>({detail:'Ошибка запроса'})); throw new ApiError(response.status,error.detail ?? error.title) }; if(response.status===204) return undefined as T; return response.json() as Promise<T> }
+export async function request<T>(path:string, options:RequestInit = {}): Promise<T> { const locale=getRequestLocale(); const response=await fetch(`/api/v1${path}`, { credentials:'include', headers:{'Content-Type':'application/json','Accept-Language':locale, ...options.headers}, ...options }); if (!response.ok) { const error=await response.json().catch(()=>({detail:locale === 'en' ? 'Request failed' : 'Ошибка запроса'})); throw new ApiError(response.status,error.detail ?? error.title) }; if(response.status===204) return undefined as T; return response.json() as Promise<T> }
 export const api = {
   login:(email:string,password:string)=>request('/auth/login',{method:'POST',body:JSON.stringify({email,password})}),
   logout:()=>request('/auth/logout',{method:'POST'}),
@@ -80,5 +80,7 @@ export const api = {
   connections:(id:string)=>request<{items:PlatformConnection[]}>(`/creators/${id}/connections`),
   integrations:()=>request<{items:IntegrationStatus[];accounts:SyncAccount[]}>('/integrations'),
   startAuthorization:(id:string,platform:string)=>request<{authorizationUrl:string;expiresAt:string}>(`/creators/${id}/connections/${platform.toLowerCase()}/authorize`,{method:'POST'}),
+  disconnectPlatformAccount:(id:string)=>request<void>(`/platform-accounts/${id}/connection`,{method:'DELETE'}),
   purgePlatformData:(id:string)=>request<void>(`/platform-accounts/${id}/data`,{method:'DELETE'}),
 }
+import { getRequestLocale } from '../i18n/locale'

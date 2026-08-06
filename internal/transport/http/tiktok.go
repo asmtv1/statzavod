@@ -240,7 +240,7 @@ func tiktokProfileURL(user tiktokUser) string {
 func (s *Server) tiktokConnections(w http.ResponseWriter, r *http.Request) {
 	p := r.Context().Value(principalKey).(principal)
 	creatorID := chi.URLParam(r, "id")
-	rows, err := s.pool.Query(r.Context(), `SELECT a.id,a.username,a.display_name,a.status,COALESCE(a.avatar_url,''),COALESCE(c.scopes,'{}'),c.last_refreshed_at,COALESCE(c.status,'') FROM platform_accounts a JOIN creator_account_assignments x ON x.platform_account_id=a.id AND x.valid_to IS NULL LEFT JOIN oauth_connections c ON c.platform_account_id=a.id WHERE x.creator_id=$1 AND a.organization_id=$2 AND a.platform='TIKTOK' ORDER BY a.created_at DESC`, creatorID, p.OrganizationID)
+	rows, err := s.pool.Query(r.Context(), `SELECT a.id,a.username,a.display_name,a.status,COALESCE(a.avatar_url,''),COALESCE(c.scopes,'{}'),c.last_refreshed_at,COALESCE(c.status,'') FROM platform_accounts a JOIN creator_account_assignments x ON x.platform_account_id=a.id AND x.valid_to IS NULL LEFT JOIN oauth_connections c ON c.platform_account_id=a.id WHERE x.creator_id=$1 AND a.organization_id=$2 AND a.platform='TIKTOK' AND a.status<>'DISCONNECTED' ORDER BY a.created_at DESC`, creatorID, p.OrganizationID)
 	if err != nil {
 		problem(w, 500, "connections failed", "could not load TikTok connections")
 		return
@@ -331,6 +331,12 @@ func (s *Server) doTikTokJSON(req *http.Request, target any) error {
 	if err != nil {
 		return fmt.Errorf("read TikTok API response: %w", err)
 	}
+	if len(bytes.TrimSpace(body)) == 0 {
+		if target == nil {
+			return nil
+		}
+		return fmt.Errorf("decode TikTok API response: empty response body")
+	}
 	var envelope struct {
 		Error            json.RawMessage `json:"error"`
 		ErrorDescription string          `json:"error_description"`
@@ -344,6 +350,9 @@ func (s *Server) doTikTokJSON(req *http.Request, target any) error {
 			return fmt.Errorf("TikTok API error %s: %s (log_id %s)", code, message, logID)
 		}
 		return fmt.Errorf("TikTok API error %s: %s", code, message)
+	}
+	if target == nil {
+		return nil
 	}
 	if err := json.Unmarshal(body, target); err != nil {
 		return fmt.Errorf("decode TikTok API payload: %w", err)
@@ -398,7 +407,9 @@ func (s *Server) revokeTikTok(ctx context.Context, accessToken string) error {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	return s.doTikTokJSON(req, &map[string]any{})
+	// TikTok documents a successful revocation as an empty response body. A nil
+	// target enables that response while retaining TikTok's JSON error parsing.
+	return s.doTikTokJSON(req, nil)
 }
 func (s *Server) tiktokConfigured() bool {
 	return s.envelope != nil && s.config.TikTokClientKey != "" && s.config.TikTokClientSecret != ""
@@ -463,7 +474,14 @@ func (s *Server) RunTikTokSync(ctx context.Context) error {
 			return err
 		}
 	}
-	_, _ = s.pool.Exec(ctx, `UPDATE platform_accounts SET last_synced_at=now(),last_error=NULL,status='ACTIVE' WHERE id=$1`, accountID)
+	// A disconnect can race with a sync that already decrypted its token. Never
+	// let that in-flight run reactivate the local account after OAuth cleanup.
+	_, _ = s.pool.Exec(ctx, `
+		UPDATE platform_accounts a
+		SET last_synced_at=now(),last_error=NULL,status='ACTIVE'
+		WHERE a.id=$1 AND a.status<>'DISCONNECTED'
+		  AND EXISTS(SELECT 1 FROM oauth_connections c WHERE c.platform_account_id=a.id AND c.status='ACTIVE')
+	`, accountID)
 	return nil
 }
 

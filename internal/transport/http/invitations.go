@@ -39,10 +39,14 @@ func (s *Server) createInvitation(w http.ResponseWriter, r *http.Request) {
 		problem(w, 500, "invitation failed", "could not create invitation")
 		return
 	}
-	acceptanceURL := strings.TrimRight(s.config.PublicBaseURL, "/") + "/accept-invitation?token=" + token
+	acceptancePath := "/accept-invitation"
+	if englishRequest(r) {
+		acceptancePath = "/en/accept-invitation"
+	}
+	acceptanceURL := strings.TrimRight(s.config.PublicBaseURL, "/") + acceptancePath + "?token=" + token
 	delivery := "manual"
 	if s.config.SMTPURL != "" {
-		if err := sendInvitationEmail(s.config.SMTPURL, in.Email, acceptanceURL); err != nil {
+		if err := sendInvitationEmail(s.config.SMTPURL, in.Email, acceptanceURL, englishRequest(r)); err != nil {
 			problem(w, 502, "invitation delivery failed", err.Error())
 			return
 		}
@@ -51,7 +55,7 @@ func (s *Server) createInvitation(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 201, map[string]any{"email": in.Email, "role": in.Role, "delivery": delivery, "expiresAt": time.Now().Add(24 * time.Hour), "acceptanceUrl": acceptanceURL})
 }
 
-func sendInvitationEmail(rawURL, recipient, acceptanceURL string) error {
+func sendInvitationEmail(rawURL, recipient, acceptanceURL string, english bool) error {
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		return fmt.Errorf("invalid SMTP_URL: %w", err)
@@ -118,7 +122,13 @@ func sendInvitationEmail(rawURL, recipient, acceptanceURL string) error {
 		return err
 	}
 	defer data.Close()
-	_, err = fmt.Fprintf(data, "To: %s\r\nFrom: Statzavod <%s>\r\nSubject: =?UTF-8?B?0J/RgNC40LPQu9Cw0YjQtdC90LjQtSDQsiBTdGF0emF2b2Q=?=\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\nВы приглашены в Statzavod. Активируйте доступ в течение 24 часов:\r\n%s\r\n", recipient, from, acceptanceURL)
+	subject := "=?UTF-8?B?0J/RgNC40LPQu9Cw0YjQtdC90LjQtSDQsiBTdGF0emF2b2Q=?="
+	body := "Вы приглашены в Statzavod. Активируйте доступ в течение 24 часов:"
+	if english {
+		subject = "Your Statzavod invitation"
+		body = "You have been invited to Statzavod. Activate your access within 24 hours:"
+	}
+	_, err = fmt.Fprintf(data, "To: %s\r\nFrom: Statzavod <%s>\r\nSubject: %s\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n%s\r\n%s\r\n", recipient, from, subject, body, acceptanceURL)
 	return err
 }
 

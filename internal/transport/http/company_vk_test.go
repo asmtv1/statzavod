@@ -15,6 +15,10 @@ func TestNormalizeVKCommunityURL(t *testing.T) {
 		{name: "reject http", input: "http://vk.ru/club1", ok: false},
 		{name: "reject other host", input: "https://example.com/club1", ok: false},
 		{name: "reject nested path", input: "https://vk.ru/club1/video", ok: false},
+		{name: "reject encoded nested path", input: "https://vk.ru/club1%2Fvideo", ok: false},
+		{name: "reject port", input: "https://vk.ru:8443/club1", ok: false},
+		{name: "reject user info", input: "https://name@vk.ru/club1", ok: false},
+		{name: "reject dot segment", input: "https://vk.ru/%2E%2E", ok: false},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

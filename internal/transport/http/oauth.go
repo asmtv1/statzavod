@@ -648,7 +648,7 @@ func (s *Server) savePlatformConnection(ctx context.Context, organizationID, cre
 func (s *Server) platformConnections(w http.ResponseWriter, r *http.Request) {
 	p := r.Context().Value(principalKey).(principal)
 	creatorID := chi.URLParam(r, "id")
-	rows, err := s.pool.Query(r.Context(), `SELECT a.id,a.platform,a.username,a.display_name,a.status,COALESCE(a.avatar_url,''),COALESCE(a.profile_url,''),COALESCE(c.scopes,'{}'),a.last_synced_at,COALESCE(c.status,''),a.metadata FROM platform_accounts a JOIN creator_account_assignments x ON x.platform_account_id=a.id AND x.valid_to IS NULL LEFT JOIN oauth_connections c ON c.platform_account_id=a.id WHERE x.creator_id=$1 AND a.organization_id=$2 ORDER BY a.platform,a.created_at DESC`, creatorID, p.OrganizationID)
+	rows, err := s.pool.Query(r.Context(), `SELECT a.id,a.platform,a.username,a.display_name,a.status,COALESCE(a.avatar_url,''),COALESCE(a.profile_url,''),COALESCE(c.scopes,'{}'),a.last_synced_at,COALESCE(c.status,''),a.metadata FROM platform_accounts a JOIN creator_account_assignments x ON x.platform_account_id=a.id AND x.valid_to IS NULL LEFT JOIN oauth_connections c ON c.platform_account_id=a.id WHERE x.creator_id=$1 AND a.organization_id=$2 AND a.status<>'DISCONNECTED' ORDER BY a.platform,a.created_at DESC`, creatorID, p.OrganizationID)
 	if err != nil {
 		problem(w, http.StatusInternalServerError, "connections failed", "could not load platform connections")
 		return
@@ -763,25 +763,29 @@ func (s *Server) integrationStatus(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		health, message := "HEALTHY", "Синхронизация работает"
+		health, message := "HEALTHY", localized(r, "Синхронизация работает", "Synchronization is working")
 		now := time.Now()
 		switch {
 		case accountStatus != "ACTIVE":
-			health, message = "ERROR", "Аккаунт требует повторного подключения"
+			health, message = "ERROR", localized(r, "Аккаунт требует повторного подключения", "The account must be reconnected")
 		case oauthStatus == "":
-			health, message = "ERROR", "Нет активного OAuth-подключения"
+			health, message = "ERROR", localized(r, "Нет активного OAuth-подключения", "There is no active OAuth connection")
 		case oauthStatus != "ACTIVE":
-			health, message = "ERROR", "Авторизация недействительна"
+			health, message = "ERROR", localized(r, "Авторизация недействительна", "Authorization is invalid")
 		case expiresAt != nil && !expiresAt.After(now):
-			health, message = "ERROR", "Токен истёк"
+			health, message = "ERROR", localized(r, "Токен истёк", "The token has expired")
 		case lastError != "":
-			health, message = "ERROR", lastError
+			message = lastError
+			if englishRequest(r) && containsCyrillic(message) {
+				message = "Synchronization failed"
+			}
+			health = "ERROR"
 		case consecutiveFailures > 0:
-			health, message = "ERROR", fmt.Sprintf("Ошибок синхронизации подряд: %d", consecutiveFailures)
+			health, message = "ERROR", fmt.Sprintf(localized(r, "Ошибок синхронизации подряд: %d", "Consecutive synchronization failures: %d"), consecutiveFailures)
 		case expiresAt != nil && expiresAt.Before(now.Add(7*24*time.Hour)):
-			health, message = "WARNING", "Срок действия токена скоро закончится"
+			health, message = "WARNING", localized(r, "Срок действия токена скоро закончится", "The token will expire soon")
 		case lastSyncedAt == nil:
-			health, message = "PENDING", "Ожидает первой синхронизации"
+			health, message = "PENDING", localized(r, "Ожидает первой синхронизации", "Waiting for the first synchronization")
 		}
 
 		accounts = append(accounts, map[string]any{
@@ -813,22 +817,116 @@ func (s *Server) integrationStatus(w http.ResponseWriter, r *http.Request) {
 func (s *Server) disconnectPlatform(w http.ResponseWriter, r *http.Request) {
 	p := r.Context().Value(principalKey).(principal)
 	accountID := chi.URLParam(r, "id")
-	var platform string
-	var accessCipher, accessNonce []byte
-	err := s.pool.QueryRow(r.Context(), `SELECT a.platform,c.access_token_ciphertext,c.access_token_nonce FROM oauth_connections c JOIN platform_accounts a ON a.id=c.platform_account_id WHERE a.id=$1 AND a.organization_id=$2`, accountID, p.OrganizationID).Scan(&platform, &accessCipher, &accessNonce)
+	connection, found, err := s.platformConnectionForRevocation(r.Context(), accountID, p.OrganizationID)
 	if err != nil {
-		problem(w, http.StatusNotFound, "connection not found", "platform connection does not exist")
+		problem(w, http.StatusInternalServerError, "disconnection failed", "could not load platform connection")
 		return
 	}
-	if s.envelope != nil {
-		if token, decryptErr := s.envelope.Decrypt(accessCipher, accessNonce); decryptErr == nil {
-			_ = s.revokePlatform(r.Context(), platform, string(token))
+	if !found {
+		// DELETE is idempotent and deliberately does not disclose whether an ID
+		// belongs to a different organization.
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if token := s.platformRevocationToken(connection); token != "" {
+		// Provider revocation is best-effort. The local transaction below is the
+		// source of truth and must still remove tokens if a provider is down or the
+		// token was already revoked.
+		_ = s.revokePlatform(r.Context(), connection.platform, token)
+	}
+
+	tx, err := s.pool.Begin(r.Context())
+	if err != nil {
+		problem(w, http.StatusInternalServerError, "disconnection failed", "could not start transaction")
+		return
+	}
+	defer tx.Rollback(r.Context())
+
+	var platform, status string
+	var hasOAuth bool
+	err = tx.QueryRow(r.Context(), `
+		SELECT a.platform,a.status,EXISTS(SELECT 1 FROM oauth_connections c WHERE c.platform_account_id=a.id AND c.organization_id=a.organization_id)
+		FROM platform_accounts a
+		WHERE a.id=$1 AND a.organization_id=$2
+		FOR UPDATE
+	`, accountID, p.OrganizationID).Scan(&platform, &status, &hasOAuth)
+	if errors.Is(err, pgx.ErrNoRows) {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if err != nil {
+		problem(w, http.StatusInternalServerError, "disconnection failed", "could not lock platform connection")
+		return
+	}
+	if _, err = tx.Exec(r.Context(), `DELETE FROM oauth_connections c USING platform_accounts a WHERE c.platform_account_id=a.id AND a.id=$1 AND a.organization_id=$2`, accountID, p.OrganizationID); err != nil {
+		problem(w, http.StatusInternalServerError, "disconnection failed", "could not remove OAuth tokens")
+		return
+	}
+	if _, err = tx.Exec(r.Context(), `UPDATE platform_accounts SET status='DISCONNECTED',last_error=NULL,updated_at=now() WHERE id=$1 AND organization_id=$2`, accountID, p.OrganizationID); err != nil {
+		problem(w, http.StatusInternalServerError, "disconnection failed", "could not update platform connection")
+		return
+	}
+	if _, err = tx.Exec(r.Context(), `UPDATE sync_targets SET status='PAUSED',last_error=NULL WHERE target_id=$1 AND organization_id=$2`, accountID, p.OrganizationID); err != nil {
+		problem(w, http.StatusInternalServerError, "disconnection failed", "could not pause synchronization")
+		return
+	}
+	if status != "DISCONNECTED" || hasOAuth {
+		if _, err = tx.Exec(r.Context(), `INSERT INTO audit_logs(organization_id,actor_id,action,entity_type,entity_id) VALUES($1,$2,$3,'PLATFORM_ACCOUNT',$4)`, p.OrganizationID, p.ID, "DISCONNECT_"+platform, accountID); err != nil {
+			problem(w, http.StatusInternalServerError, "disconnection failed", "could not record disconnection")
+			return
 		}
 	}
-	_, _ = s.pool.Exec(r.Context(), `DELETE FROM oauth_connections WHERE platform_account_id=$1`, accountID)
-	_, _ = s.pool.Exec(r.Context(), `UPDATE platform_accounts SET status='DISCONNECTED',updated_at=now() WHERE id=$1 AND organization_id=$2`, accountID, p.OrganizationID)
-	_, _ = s.pool.Exec(r.Context(), `UPDATE sync_targets SET status='PAUSED' WHERE target_id=$1 AND organization_id=$2`, accountID, p.OrganizationID)
+	if err = tx.Commit(r.Context()); err != nil {
+		problem(w, http.StatusInternalServerError, "disconnection failed", "could not commit disconnection")
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+type platformRevocationConnection struct {
+	platform                    string
+	accessCipher, accessNonce   []byte
+	refreshCipher, refreshNonce []byte
+}
+
+func (s *Server) platformConnectionForRevocation(ctx context.Context, accountID, organizationID string) (platformRevocationConnection, bool, error) {
+	var connection platformRevocationConnection
+	err := s.pool.QueryRow(ctx, `
+		SELECT a.platform,
+			COALESCE(c.access_token_ciphertext,''::bytea),COALESCE(c.access_token_nonce,''::bytea),
+			COALESCE(c.refresh_token_ciphertext,''::bytea),COALESCE(c.refresh_token_nonce,''::bytea)
+		FROM platform_accounts a
+		LEFT JOIN oauth_connections c ON c.platform_account_id=a.id AND c.organization_id=a.organization_id
+		WHERE a.id=$1 AND a.organization_id=$2
+	`, accountID, organizationID).Scan(&connection.platform, &connection.accessCipher, &connection.accessNonce, &connection.refreshCipher, &connection.refreshNonce)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return platformRevocationConnection{}, false, nil
+	}
+	return connection, err == nil, err
+}
+
+func (s *Server) platformRevocationToken(connection platformRevocationConnection) string {
+	if s.envelope == nil {
+		return ""
+	}
+	decrypt := func(ciphertext, nonce []byte) string {
+		if len(ciphertext) == 0 || len(nonce) == 0 {
+			return ""
+		}
+		plain, err := s.envelope.Decrypt(ciphertext, nonce)
+		if err != nil {
+			return ""
+		}
+		return string(plain)
+	}
+	// Google recommends revoking the refresh token when one is available, so
+	// an expired access token cannot leave a reusable long-lived credential.
+	if connection.platform == "YOUTUBE" {
+		if token := decrypt(connection.refreshCipher, connection.refreshNonce); token != "" {
+			return token
+		}
+	}
+	return decrypt(connection.accessCipher, connection.accessNonce)
 }
 
 func (s *Server) revokePlatform(ctx context.Context, platform, accessToken string) error {
@@ -836,7 +934,7 @@ func (s *Server) revokePlatform(ctx context.Context, platform, accessToken strin
 	case "TIKTOK":
 		return s.revokeTikTok(ctx, accessToken)
 	case "YOUTUBE":
-		return doJSON(ctx, http.MethodPost, strings.TrimRight(s.config.YouTubeOAuthBase, "/")+"/revoke?"+url.Values{"token": {accessToken}}.Encode(), "", &map[string]any{})
+		return doOAuthForm(ctx, strings.TrimRight(s.config.YouTubeOAuthBase, "/")+"/revoke", url.Values{"token": {accessToken}}, &map[string]any{})
 	case "INSTAGRAM":
 		return doJSON(ctx, http.MethodDelete, strings.TrimRight(s.config.InstagramAPIBase, "/")+"/me/permissions?"+url.Values{"access_token": {accessToken}}.Encode(), "", &map[string]any{})
 	default:
@@ -850,29 +948,18 @@ func (s *Server) purgePlatformData(w http.ResponseWriter, r *http.Request) {
 
 	// Revocation is best-effort: local deletion must still succeed when the
 	// provider is unavailable or the token has already been revoked.
-	var platform string
-	var accessCipher, accessNonce []byte
-	err := s.pool.QueryRow(r.Context(), `
-		SELECT a.platform,
-			COALESCE(c.access_token_ciphertext, ''::bytea),
-			COALESCE(c.access_token_nonce, ''::bytea)
-		FROM platform_accounts a
-		LEFT JOIN oauth_connections c ON c.platform_account_id = a.id
-		WHERE a.id=$1 AND a.organization_id=$2
-	`, accountID, p.OrganizationID).Scan(&platform, &accessCipher, &accessNonce)
-	if errors.Is(err, pgx.ErrNoRows) {
-		// DELETE is idempotent. A retry after a lost 204 response is successful.
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
+	connection, found, err := s.platformConnectionForRevocation(r.Context(), accountID, p.OrganizationID)
 	if err != nil {
 		problem(w, http.StatusInternalServerError, "deletion failed", "could not load platform connection")
 		return
 	}
-	if s.envelope != nil && len(accessCipher) > 0 && len(accessNonce) > 0 {
-		if token, decryptErr := s.envelope.Decrypt(accessCipher, accessNonce); decryptErr == nil {
-			_ = s.revokePlatform(r.Context(), platform, string(token))
-		}
+	if !found {
+		// DELETE is idempotent. A retry after a lost 204 response is successful.
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if token := s.platformRevocationToken(connection); token != "" {
+		_ = s.revokePlatform(r.Context(), connection.platform, token)
 	}
 
 	tx, err := s.pool.Begin(r.Context())
@@ -884,6 +971,7 @@ func (s *Server) purgePlatformData(w http.ResponseWriter, r *http.Request) {
 
 	// Serialize deletion with updates to this account. Related account,
 	// publication and OAuth rows use cascading foreign keys (migration 00009).
+	platform := connection.platform
 	if err = tx.QueryRow(r.Context(), `SELECT platform FROM platform_accounts WHERE id=$1 AND organization_id=$2 FOR UPDATE`, accountID, p.OrganizationID).Scan(&platform); errors.Is(err, pgx.ErrNoRows) {
 		w.WriteHeader(http.StatusNoContent)
 		return
