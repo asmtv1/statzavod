@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/xuri/excelize/v2"
 	"net/http"
@@ -445,7 +446,8 @@ func (s *Server) restoreCreator(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 func (s *Server) listContentGroups(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.pool.Query(r.Context(), `SELECT g.id,g.name,g.status,c.display_name,count(m.publication_id) FROM content_groups g JOIN creators c ON c.id=g.creator_id LEFT JOIN content_group_members m ON m.content_group_id=g.id GROUP BY g.id,c.display_name ORDER BY g.created_at DESC`)
+	p := r.Context().Value(principalKey).(principal)
+	rows, err := s.pool.Query(r.Context(), `SELECT g.id,g.name,g.status,c.display_name,count(m.publication_id) FROM content_groups g JOIN creators c ON c.id=g.creator_id AND c.organization_id=$1 LEFT JOIN content_group_members m ON m.content_group_id=g.id GROUP BY g.id,c.display_name ORDER BY g.created_at DESC`, p.OrganizationID)
 	if err != nil {
 		problem(w, 500, "groups failed", err.Error())
 		return
@@ -474,7 +476,11 @@ func (s *Server) createContentGroup(w http.ResponseWriter, r *http.Request) {
 	}
 	p := r.Context().Value(principalKey).(principal)
 	var id string
-	err := s.pool.QueryRow(r.Context(), `INSERT INTO content_groups(creator_id,name,created_by) VALUES($1,$2,$3) RETURNING id`, in.CreatorID, in.Name, p.ID).Scan(&id)
+	err := s.pool.QueryRow(r.Context(), `INSERT INTO content_groups(creator_id,name,created_by) SELECT id,$2,$3 FROM creators WHERE id=$1 AND organization_id=$4 RETURNING id`, in.CreatorID, in.Name, p.ID, p.OrganizationID).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		problem(w, http.StatusNotFound, "creator not found", "creator does not exist in this organization")
+		return
+	}
 	if err != nil {
 		problem(w, 500, "group creation failed", err.Error())
 		return
@@ -515,7 +521,8 @@ func (s *Server) summary(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"kpis": []map[string]any{{"key": "views", "label": "Просмотры", "value": views}, {"key": "likes", "label": "Реакции", "value": likes}, {"key": "publications", "label": "Публикации", "value": publications}, {"key": "creators", "label": "Креаторы", "value": creators}}, "freshness": map[string]string{"status": "partial", "message": "Подключите платформенные аккаунты для сбора данных."}})
 }
 func (s *Server) timeseries(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.pool.Query(r.Context(), `SELECT observed_at::date,COALESCE(sum(views),0) FROM publication_metric_snapshots GROUP BY observed_at::date ORDER BY observed_at::date`)
+	p := r.Context().Value(principalKey).(principal)
+	rows, err := s.pool.Query(r.Context(), `SELECT s.observed_at::date,COALESCE(sum(s.views),0) FROM publication_metric_snapshots s JOIN publications p ON p.id=s.publication_id WHERE p.organization_id=$1 GROUP BY s.observed_at::date ORDER BY s.observed_at::date`, p.OrganizationID)
 	if err != nil {
 		problem(w, 500, "timeseries failed", err.Error())
 		return
@@ -707,8 +714,9 @@ func (s *Server) exportCreator(w http.ResponseWriter, r *http.Request) {
 	}
 }
 func (s *Server) syncHealth(w http.ResponseWriter, r *http.Request) {
+	p := r.Context().Value(principalKey).(principal)
 	var due int64
-	_ = s.pool.QueryRow(r.Context(), `SELECT count(*) FROM sync_targets WHERE next_sync_at<=now() AND status='ACTIVE'`).Scan(&due)
+	_ = s.pool.QueryRow(r.Context(), `SELECT count(*) FROM sync_targets WHERE organization_id=$1 AND next_sync_at<=now() AND status='ACTIVE'`, p.OrganizationID).Scan(&due)
 	writeJSON(w, 200, map[string]any{"dueTargets": due, "status": "healthy"})
 }
 func (s *Server) requestID(next http.Handler) http.Handler {
