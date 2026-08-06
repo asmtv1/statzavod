@@ -246,7 +246,10 @@ export function LegalPage({ kind, lang = 'ru' }: { kind: Kind; lang?: Language }
       <div className={styles.card}>
         <header className={styles.header}>
           <Link className={styles.brand} to={prefix || '/'}>STATZAVOD</Link>
-          <Link className={styles.language} to={`${lang === 'ru' ? '/en' : ''}${paths[kind]}`}>{lang === 'ru' ? 'EN' : 'RU'}</Link>
+          <div className={styles.headerActions}>
+            <Link className={styles.language} to={`${lang === 'ru' ? '/en' : ''}${paths[kind]}`}>{lang === 'ru' ? 'EN' : 'RU'}</Link>
+            <Link className={styles.close} to="/" aria-label={lang === 'ru' ? 'Закрыть документ' : 'Close document'}>× <span>{lang === 'ru' ? 'Закрыть' : 'Close'}</span></Link>
+          </div>
         </header>
         <nav className={styles.documentNav} aria-label={lang === 'ru' ? 'Юридические документы' : 'Legal documents'}>
           {documentOrder.map(item => <Link key={item} className={item === kind ? styles.active : undefined} to={`${prefix}${paths[item]}`}>{navLabels[lang][item]}</Link>)}
