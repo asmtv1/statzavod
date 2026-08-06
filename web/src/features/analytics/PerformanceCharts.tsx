@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import styles from './AnalyticsPage.module.scss'
+import { useI18n } from '../../shared/i18n/I18nProvider'
 
 export type DailyAnalyticsPoint = {
   date: string
@@ -18,13 +19,11 @@ export type PlatformAnalyticsPoint = {
 type Metric = 'views' | 'likes' | 'publications'
 type ChartInstance = { dispose(): void; resize(): void; setOption(option: object): void }
 
-const number = new Intl.NumberFormat('ru-RU')
-const shortDate = new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'short' })
 const platformNames: Record<string, string> = {
   YOUTUBE: 'YouTube',
   INSTAGRAM: 'Instagram',
   TIKTOK: 'TikTok',
-  VK: 'ВКонтакте',
+  VK: 'VK',
 }
 const platformColors: Record<string, string> = {
   YOUTUBE: '#ef776d',
@@ -34,22 +33,22 @@ const platformColors: Record<string, string> = {
 }
 const fallbackColors = ['#e4b667', '#a69ce5', '#8fd7d1', '#d99b75']
 
-const metricLabels: Record<Metric, string> = {
-  views: 'Просмотры',
-  likes: 'Реакции',
-  publications: 'Публикации',
-}
+const labels = (locale: 'ru'|'en'): Record<Metric, string> => locale === 'en'
+  ? { views: 'Views', likes: 'Reactions', publications: 'Publications' }
+  : { views: 'Просмотры', likes: 'Реакции', publications: 'Публикации' }
 
 function parseDate(value: string) {
   return new Date(`${value}T00:00:00`)
 }
 
-function MetricSwitch({ value, onChange, metrics = ['views', 'likes', 'publications'] }: {
+function MetricSwitch({ value, onChange, locale, metrics = ['views', 'likes', 'publications'] }: {
   value: Metric
   onChange: (metric: Metric) => void
+  locale: 'ru'|'en'
   metrics?: Metric[]
 }) {
-  return <div className={styles.metricSwitch} aria-label="Показатель">
+  const metricLabels = labels(locale)
+  return <div className={styles.metricSwitch} aria-label={locale === 'en' ? 'Metric' : 'Показатель'}>
     {metrics.map(metric => <button
       aria-pressed={value === metric}
       className={value === metric ? styles.metricActive : undefined}
@@ -61,8 +60,12 @@ function MetricSwitch({ value, onChange, metrics = ['views', 'likes', 'publicati
 }
 
 export function DailyPerformanceChart({ data }: { data: DailyAnalyticsPoint[] }) {
+  const { locale } = useI18n()
   const container = useRef<HTMLDivElement>(null)
   const [metric, setMetric] = useState<Metric>('views')
+  const number = new Intl.NumberFormat(locale === 'en' ? 'en-US' : 'ru-RU')
+  const shortDate = new Intl.DateTimeFormat(locale === 'en' ? 'en-US' : 'ru-RU', { day: 'numeric', month: 'short' })
+  const metricLabels = labels(locale)
 
   useEffect(() => {
     if (!container.current || !data.length) return
@@ -116,22 +119,25 @@ export function DailyPerformanceChart({ data }: { data: DailyAnalyticsPoint[] })
     const resize = () => chart?.resize()
     window.addEventListener('resize', resize)
     return () => { cancelled = true; window.removeEventListener('resize', resize); chart?.dispose() }
-  }, [data, metric])
+  }, [data, locale, metric])
 
   const total = data.reduce((sum, point) => sum + point[metric], 0)
   return <>
     <div className={styles.chartToolbar}>
-      <MetricSwitch value={metric} onChange={setMetric}/>
-      <span>За период: <strong>{number.format(total)}</strong></span>
+      <MetricSwitch value={metric} onChange={setMetric} locale={locale}/>
+      <span>{locale === 'en' ? 'For the period:' : 'За период:'} <strong>{number.format(total)}</strong></span>
     </div>
     <div ref={container} className={styles.dailyChart} role="img" aria-label={`${metricLabels[metric]} публикаций по дням`}/>
   </>
 }
 
 export function PlatformBreakdownChart({ data }: { data: PlatformAnalyticsPoint[] }) {
+  const { locale } = useI18n()
   const container = useRef<HTMLDivElement>(null)
   const [metric, setMetric] = useState<Metric>('views')
   const total = data.reduce((sum, point) => sum + point[metric], 0)
+  const number = new Intl.NumberFormat(locale === 'en' ? 'en-US' : 'ru-RU')
+  const metricLabels = labels(locale)
 
   useEffect(() => {
     if (!container.current || !data.length || !total) return
@@ -167,14 +173,14 @@ export function PlatformBreakdownChart({ data }: { data: PlatformAnalyticsPoint[
     const resize = () => chart?.resize()
     window.addEventListener('resize', resize)
     return () => { cancelled = true; window.removeEventListener('resize', resize); chart?.dispose() }
-  }, [data, metric, total])
+  }, [data, locale, metric, total])
 
   return <>
-    <MetricSwitch value={metric} onChange={setMetric}/>
+    <MetricSwitch value={metric} onChange={setMetric} locale={locale}/>
     {total ? <div className={styles.platformChartWrap}>
       <div ref={container} className={styles.platformChart} role="img" aria-label={`${metricLabels[metric]} по платформам`}/>
       <div className={styles.donutTotal} aria-hidden="true"><strong>{number.format(total)}</strong><span>{metricLabels[metric].toLowerCase()}</span></div>
-    </div> : <div className={styles.chartEmpty}>Нет данных по показателю</div>}
+    </div> : <div className={styles.chartEmpty}>{locale === 'en' ? 'No data for this metric' : 'Нет данных по показателю'}</div>}
     <div className={styles.platformLegend}>
       {data.map((point, index) => {
         const value = point[metric]
@@ -182,7 +188,7 @@ export function PlatformBreakdownChart({ data }: { data: PlatformAnalyticsPoint[
         const color = platformColors[point.platform] ?? fallbackColors[index % fallbackColors.length]
         return <div key={point.platform}>
           <i style={{ backgroundColor: color }}/>
-          <span><b>{platformNames[point.platform] ?? point.platform}</b><small>{point.publications} публикац.</small></span>
+          <span><b>{platformNames[point.platform] ?? point.platform}</b><small>{point.publications} {locale === 'en' ? 'publications' : 'публикац.'}</small></span>
           <strong>{number.format(value)} <small>{share}%</small></strong>
         </div>
       })}
