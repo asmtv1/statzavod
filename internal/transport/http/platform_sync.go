@@ -114,6 +114,24 @@ func (s *Server) syncPlatformAccount(ctx context.Context, job platformSyncJob) (
 	case "INSTAGRAM":
 		return s.syncInstagramAccount(ctx, job, accessToken)
 	case "TIKTOK":
+		user, fetchErr := s.fetchTikTokUser(ctx, accessToken)
+		if fetchErr != nil {
+			return syncResult{}, fetchErr
+		}
+		if err := s.refreshPlatformAccountProfile(ctx, job, platformProfile{
+			Username:    tiktokUsername(user),
+			DisplayName: user.DisplayName,
+			ProfileURL:  tiktokProfileURL(user),
+			AvatarURL:   user.AvatarURL,
+			AccountType: "CREATOR",
+			Metadata: map[string]any{
+				"followerCount": user.FollowerCount, "followingCount": user.FollowingCount,
+				"likesCount": user.LikesCount, "videoCount": user.VideoCount,
+				"bioDescription": user.BioDescription, "isVerified": user.IsVerified,
+			},
+		}); err != nil {
+			return syncResult{}, err
+		}
 		videos, fetchErr := s.fetchTikTokVideos(ctx, accessToken)
 		if fetchErr != nil {
 			return syncResult{}, fetchErr
@@ -131,6 +149,27 @@ func (s *Server) syncPlatformAccount(ctx context.Context, job platformSyncJob) (
 	default:
 		return syncResult{}, fmt.Errorf("unsupported platform %s", job.Platform)
 	}
+}
+
+// refreshPlatformAccountProfile keeps mutable public identity fields current
+// without replacing provider-specific metadata required for token refresh or
+// account selection.
+func (s *Server) refreshPlatformAccountProfile(ctx context.Context, job platformSyncJob, profile platformProfile) error {
+	metadata, _ := json.Marshal(profile.Metadata)
+	if len(metadata) == 0 || string(metadata) == "null" {
+		metadata = []byte("{}")
+	}
+	_, err := s.pool.Exec(ctx, `
+		UPDATE platform_accounts a
+		SET username=$4,display_name=$5,profile_url=$6,avatar_url=$7,
+			account_type=COALESCE(NULLIF($8,''),a.account_type),
+			metadata=a.metadata || $9::jsonb,updated_at=now()
+		WHERE a.id=$1 AND a.organization_id=$2 AND a.platform=$3
+			AND a.status<>'DISCONNECTED'
+			AND EXISTS(SELECT 1 FROM oauth_connections c WHERE c.platform_account_id=a.id AND c.status='ACTIVE')
+	`, job.AccountID, job.OrganizationID, job.Platform, profile.Username, profile.DisplayName,
+		profile.ProfileURL, profile.AvatarURL, profile.AccountType, string(metadata))
+	return err
 }
 
 func (s *Server) finishPlatformSync(ctx context.Context, job platformSyncJob, result syncResult, syncErr error) error {

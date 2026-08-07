@@ -73,3 +73,28 @@ func TestResolveVKCommunityRejectsProfile(t *testing.T) {
 		t.Fatal("expected a user profile URL to be rejected")
 	}
 }
+
+func TestFetchVKCurrentProfile(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/method/users.get" || r.URL.Query().Get("access_token") != "token" {
+			t.Fatalf("unexpected VK profile request: %s", r.URL.String())
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"response": []any{map[string]any{
+			"id": 7, "first_name": "Иван", "last_name": "Иванов",
+			"screen_name": "current_name", "photo_200": "https://img.example/current.jpg",
+		}}})
+	}))
+	defer server.Close()
+
+	s := &Server{config: config.Config{VKAPIBase: server.URL, VKAPIVersion: "5.199"}}
+	profile, err := s.fetchVKCurrentProfile(t.Context(), "token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile.Username != "current_name" || profile.DisplayName != "Иван Иванов" {
+		t.Fatalf("unexpected VK identity: %#v", profile)
+	}
+	if profile.ProfileURL != "https://vk.ru/current_name" || profile.AvatarURL != "https://img.example/current.jpg" {
+		t.Fatalf("unexpected VK links: %#v", profile)
+	}
+}

@@ -18,6 +18,40 @@ type vkAPIError struct {
 	Text string `json:"error_msg"`
 }
 
+func (s *Server) fetchVKCurrentProfile(ctx context.Context, accessToken string) (platformProfile, error) {
+	var out struct {
+		Response []struct {
+			ID         int64  `json:"id"`
+			FirstName  string `json:"first_name"`
+			LastName   string `json:"last_name"`
+			ScreenName string `json:"screen_name"`
+			Photo      string `json:"photo_200"`
+		} `json:"response"`
+		Error *vkAPIError `json:"error"`
+	}
+	endpoint := strings.TrimRight(s.config.VKAPIBase, "/") + "/method/users.get?" + url.Values{
+		"access_token": {accessToken}, "fields": {"screen_name,photo_200"}, "v": {s.config.VKAPIVersion},
+	}.Encode()
+	if err := doJSON(ctx, http.MethodGet, endpoint, "", &out); err != nil {
+		return platformProfile{}, err
+	}
+	if out.Error != nil {
+		return platformProfile{}, classifyVKError(out.Error)
+	}
+	if len(out.Response) == 0 || out.Response[0].ID == 0 {
+		return platformProfile{}, &providerError{Platform: "VK", Kind: providerSchema, Message: "profile is unavailable"}
+	}
+	user := out.Response[0]
+	username := user.ScreenName
+	if username == "" {
+		username = "id" + strconv.FormatInt(user.ID, 10)
+	}
+	return platformProfile{
+		Username: username, DisplayName: firstNonEmpty(strings.TrimSpace(user.FirstName+" "+user.LastName), username),
+		ProfileURL: "https://vk.ru/" + username, AvatarURL: user.Photo, AccountType: "COMPANY_OPERATOR",
+	}, nil
+}
+
 func (s *Server) refreshVKAccessToken(ctx context.Context, refreshToken, deviceID string) (oauthToken, error) {
 	if deviceID == "" {
 		return oauthToken{}, &providerError{Platform: "VK", Kind: providerAuth, Message: "VK ID device ID is missing"}
@@ -69,6 +103,13 @@ type vkVideo struct {
 }
 
 func (s *Server) syncVKCommunities(ctx context.Context, job platformSyncJob, accessToken string) (syncResult, error) {
+	profile, err := s.fetchVKCurrentProfile(ctx, accessToken)
+	if err != nil {
+		return syncResult{}, err
+	}
+	if err := s.refreshPlatformAccountProfile(ctx, job, profile); err != nil {
+		return syncResult{}, err
+	}
 	rows, err := s.pool.Query(ctx, `SELECT v.creator_id,v.community_url FROM creator_vk_assignments v JOIN company_vk_accounts a ON a.id=v.company_vk_account_id WHERE a.platform_account_id=$1 AND a.organization_id=$2 ORDER BY v.creator_id`, job.AccountID, job.OrganizationID)
 	if err != nil {
 		return syncResult{}, err

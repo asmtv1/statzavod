@@ -84,10 +84,11 @@ func (s *Server) syncInstagramAccount(ctx context.Context, job platformSyncJob, 
 	`, job.AccountID, account.FollowersCount, account.FollowsCount, account.MediaCount, string(metadata)); err != nil {
 		return syncResult{}, err
 	}
-	if _, err = s.pool.Exec(ctx, `
-		UPDATE platform_accounts SET username=$2,display_name=$3,avatar_url=$4,account_type=$5,updated_at=now()
-		WHERE id=$1
-	`, job.AccountID, account.Username, firstNonEmpty(account.Name, account.Username), account.ProfilePictureURL, account.AccountType); err != nil {
+	if err = s.refreshPlatformAccountProfile(ctx, job, platformProfile{
+		Username: account.Username, DisplayName: firstNonEmpty(account.Name, account.Username),
+		ProfileURL: "https://www.instagram.com/" + account.Username + "/",
+		AvatarURL:  account.ProfilePictureURL, AccountType: account.AccountType,
+	}); err != nil {
 		return syncResult{}, err
 	}
 

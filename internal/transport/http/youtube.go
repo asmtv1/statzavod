@@ -17,6 +17,9 @@ type youtubeChannel struct {
 		Title       string `json:"title"`
 		CustomURL   string `json:"customUrl"`
 		Description string `json:"description"`
+		Thumbnails  map[string]struct {
+			URL string `json:"url"`
+		} `json:"thumbnails"`
 	} `json:"snippet"`
 	ContentDetails struct {
 		RelatedPlaylists struct {
@@ -84,6 +87,9 @@ func (s *Server) syncYouTubeAccount(ctx context.Context, job platformSyncJob, ac
 		return syncResult{}, &providerError{Platform: "YouTube", Kind: providerSchema, Message: "channel uploads playlist is unavailable"}
 	}
 	channel := channelResponse.Items[0]
+	if err := s.refreshPlatformAccountProfile(ctx, job, youtubeChannelProfile(channel)); err != nil {
+		return syncResult{}, err
+	}
 	if err := s.saveYouTubeAccountSnapshot(ctx, job.AccountID, channel); err != nil {
 		return syncResult{}, err
 	}
@@ -117,6 +123,26 @@ func (s *Server) syncYouTubeAccount(ctx context.Context, job platformSyncJob, ac
 		return result, err
 	}
 	return result, nil
+}
+
+func youtubeChannelProfile(channel youtubeChannel) platformProfile {
+	username := strings.TrimPrefix(channel.Snippet.CustomURL, "@")
+	if username == "" {
+		username = channel.ID
+	}
+	avatar := ""
+	for _, key := range []string{"high", "medium", "default"} {
+		if thumbnail, ok := channel.Snippet.Thumbnails[key]; ok && thumbnail.URL != "" {
+			avatar = thumbnail.URL
+			break
+		}
+	}
+	return platformProfile{
+		Username: username, DisplayName: channel.Snippet.Title,
+		ProfileURL: "https://www.youtube.com/channel/" + channel.ID,
+		AvatarURL:  avatar, AccountType: "CHANNEL",
+		Metadata: map[string]any{"description": channel.Snippet.Description},
+	}
 }
 
 func (s *Server) fetchYouTubeUploadIDs(ctx context.Context, client providerClient, accessToken, playlistID string) ([]string, error) {

@@ -465,6 +465,16 @@ func (s *Server) RunTikTokSync(ctx context.Context) error {
 		}
 		plain = []byte(refreshed.AccessToken)
 	}
+	// TikTok users can change their username, display name, avatar, or profile
+	// link without reconnecting OAuth. Refresh those fields on every import so
+	// links shown in the application do not become stale.
+	user, err := s.fetchTikTokUser(ctx, string(plain))
+	if err != nil {
+		return err
+	}
+	if err := s.refreshTikTokProfile(ctx, organizationID, accountID, user); err != nil {
+		return err
+	}
 	videos, err := s.fetchTikTokVideos(ctx, string(plain))
 	if err != nil {
 		return err
@@ -483,6 +493,18 @@ func (s *Server) RunTikTokSync(ctx context.Context) error {
 		  AND EXISTS(SELECT 1 FROM oauth_connections c WHERE c.platform_account_id=a.id AND c.status='ACTIVE')
 	`, accountID)
 	return nil
+}
+
+func (s *Server) refreshTikTokProfile(ctx context.Context, organizationID, accountID string, user tiktokUser) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE platform_accounts a
+		SET username=$3, display_name=$4, profile_url=$5, avatar_url=$6,
+			metadata=$7::jsonb, updated_at=now()
+		WHERE a.id=$1 AND a.organization_id=$2 AND a.platform='TIKTOK'
+			AND a.status<>'DISCONNECTED'
+			AND EXISTS(SELECT 1 FROM oauth_connections c WHERE c.platform_account_id=a.id AND c.status='ACTIVE')
+	`, accountID, organizationID, tiktokUsername(user), user.DisplayName, tiktokProfileURL(user), user.AvatarURL, tikTokMetadata(user))
+	return err
 }
 
 func (s *Server) fetchTikTokVideos(ctx context.Context, accessToken string) ([]tiktokVideo, error) {

@@ -70,3 +70,40 @@ func TestRevokeTikTokReturnsProviderError(t *testing.T) {
 		t.Fatal("expected provider error")
 	}
 }
+
+func TestFetchTikTokUserIncludesCurrentProfileFields(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v2/user/info/" {
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer access-token" {
+			t.Fatalf("unexpected authorization %q", r.Header.Get("Authorization"))
+		}
+		fields := r.URL.Query().Get("fields")
+		for _, field := range []string{"username", "avatar_url", "profile_deep_link", "display_name"} {
+			if !strings.Contains(fields, field) {
+				t.Fatalf("profile field %q was not requested: %q", field, fields)
+			}
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"data": map[string]any{"user": map[string]any{
+			"open_id": "open-id", "username": "anastas_o_faadl", "display_name": "Anastasia",
+			"avatar_url": "https://cdn.example/avatar.jpg", "profile_deep_link": "https://www.tiktok.com/@anastas_o_faadl",
+		}}})
+	}))
+	defer server.Close()
+
+	s := &Server{config: config.Config{TikTokAPIBase: server.URL}}
+	user, err := s.fetchTikTokUser(t.Context(), "access-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := tiktokUsername(user), "anastas_o_faadl"; got != want {
+		t.Fatalf("username = %q, want %q", got, want)
+	}
+	if got, want := tiktokProfileURL(user), "https://www.tiktok.com/@anastas_o_faadl"; got != want {
+		t.Fatalf("profile URL = %q, want %q", got, want)
+	}
+	if got, want := user.AvatarURL, "https://cdn.example/avatar.jpg"; got != want {
+		t.Fatalf("avatar URL = %q, want %q", got, want)
+	}
+}
