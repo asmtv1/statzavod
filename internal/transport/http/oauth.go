@@ -151,14 +151,7 @@ func (s *Server) oauthAuthorize(w http.ResponseWriter, r *http.Request) {
 		q.Set("include_granted_scopes", "true")
 		q.Set("prompt", "consent")
 	case "INSTAGRAM":
-		if provider.Flow == "FACEBOOK" {
-			q.Set("config_id", s.config.InstagramFacebookConfigID)
-			q.Set("scope", strings.Join(provider.Scopes, ","))
-			q.Set("override_default_response_type", "true")
-			q.Set("auth_type", "rerequest")
-		} else {
-			q.Set("scope", strings.Join(provider.Scopes, ","))
-		}
+		configureInstagramAuthorization(q, provider, s.config.InstagramFacebookConfigID)
 	case "VK":
 		q.Set("scope", strings.Join(provider.Scopes, " "))
 	}
@@ -167,6 +160,20 @@ func (s *Server) oauthAuthorize(w http.ResponseWriter, r *http.Request) {
 		q.Set("code_challenge_method", "S256")
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"authorizationUrl": provider.AuthorizeURL + "?" + q.Encode(), "expiresAt": time.Now().Add(10 * time.Minute)})
+}
+
+func configureInstagramAuthorization(query url.Values, provider oauthProvider, facebookConfigID string) {
+	if provider.Flow != "FACEBOOK" {
+		query.Set("scope", strings.Join(provider.Scopes, ","))
+		return
+	}
+	// Facebook Login for Business gets permissions and Page asset selection
+	// from config_id. Meta documents config_id as the replacement for scope;
+	// sending both can produce an ordinary user consent without Page assets.
+	query.Del("scope")
+	query.Set("config_id", facebookConfigID)
+	query.Set("override_default_response_type", "true")
+	query.Set("auth_type", "rerequest")
 }
 
 func (s *Server) companyVKOAuthAuthorize(w http.ResponseWriter, r *http.Request) {
@@ -373,6 +380,9 @@ func (s *Server) completeInstagramFacebookOAuth(ctx context.Context, provider oa
 		}
 	}
 	if len(linkedPages) == 0 {
+		if len(pages) == 0 {
+			return oauthToken{}, platformProfile{}, fmt.Errorf("Facebook granted the requested permissions but returned 0 Page assets; check the Facebook Login for Business configuration and selected Pages")
+		}
 		pageNames := make([]string, 0, len(pages))
 		for _, page := range pages {
 			pageNames = append(pageNames, page.Name+" ("+page.ID+")")

@@ -3,6 +3,7 @@ package httpserver
 import (
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -78,6 +79,31 @@ func TestCompleteInstagramOAuth(t *testing.T) {
 	}
 	if token.AccessToken != "long" || profile.ExternalID != "42" || profile.Username != "creator" {
 		t.Fatalf("unexpected result: %#v %#v", token, profile)
+	}
+}
+
+func TestConfigureInstagramFacebookAuthorizationUsesConfigInsteadOfScope(t *testing.T) {
+	query := url.Values{"scope": {"must-be-removed"}}
+	provider := oauthProvider{Flow: "FACEBOOK", Scopes: []string{"instagram_basic", "pages_show_list"}}
+
+	configureInstagramAuthorization(query, provider, "config-1")
+
+	if query.Has("scope") {
+		t.Fatalf("Facebook Login for Business URL must not include scope: %s", query.Encode())
+	}
+	if query.Get("config_id") != "config-1" || query.Get("override_default_response_type") != "true" || query.Get("auth_type") != "rerequest" {
+		t.Fatalf("unexpected Facebook Login for Business query: %s", query.Encode())
+	}
+}
+
+func TestConfigureInstagramLoginUsesScopes(t *testing.T) {
+	query := url.Values{}
+	provider := oauthProvider{Scopes: []string{"instagram_business_basic", "instagram_business_manage_insights"}}
+
+	configureInstagramAuthorization(query, provider, "")
+
+	if query.Get("scope") != "instagram_business_basic,instagram_business_manage_insights" || query.Has("config_id") {
+		t.Fatalf("unexpected Instagram Login query: %s", query.Encode())
 	}
 }
 
