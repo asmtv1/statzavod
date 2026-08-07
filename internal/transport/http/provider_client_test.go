@@ -47,6 +47,30 @@ func TestProviderClientClassifiesAuthorization(t *testing.T) {
 	}
 }
 
+func TestProviderClientClassifiesOAuthInvalidGrantAsAuthorization(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_grant"})
+	}))
+	defer server.Close()
+
+	err := newProviderClient("Test").JSON(t.Context(), http.MethodPost, server.URL, "", "application/x-www-form-urlencoded", strings.NewReader("grant_type=refresh_token"), &map[string]any{})
+	if !isProviderKind(err, providerAuth) {
+		t.Fatalf("expected auth error, got %v", err)
+	}
+}
+
+func TestProviderClientClassifiesMetaInvalidTokenAsAuthorization(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": map[string]any{"code": 190, "message": "Invalid OAuth access token"}})
+	}))
+	defer server.Close()
+
+	err := newProviderClient("Instagram").JSON(t.Context(), http.MethodGet, server.URL, "", "", nil, &map[string]any{})
+	if !isProviderKind(err, providerAuth) {
+		t.Fatalf("expected auth error, got %v", err)
+	}
+}
+
 func TestVerifyInstagramSignedRequest(t *testing.T) {
 	const secret = "secret"
 	payload, _ := json.Marshal(map[string]string{"algorithm": "HMAC-SHA256", "user_id": "42"})

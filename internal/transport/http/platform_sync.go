@@ -30,6 +30,127 @@ type syncResult struct {
 	RecordsWritten int
 }
 
+// RunOAuthTokenRefresh refreshes short-lived access tokens independently from
+// the (usually much slower) statistics import cadence. Without this pass a
+// YouTube token, for example, can expire after one hour while the next import
+// is not due for another five hours.
+func (s *Server) RunOAuthTokenRefresh(ctx context.Context, limit int) (int, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT a.id,a.organization_id,a.platform,a.external_id
+		FROM oauth_connections c
+		JOIN platform_accounts a ON a.id=c.platform_account_id AND a.organization_id=c.organization_id
+		WHERE c.status='ACTIVE'
+		  AND a.status<>'DISCONNECTED'
+		  AND c.expires_at IS NOT NULL
+		  AND c.expires_at<=now()+CASE
+			WHEN a.platform='INSTAGRAM' THEN interval '7 days'
+			ELSE interval '10 minutes'
+		  END
+		ORDER BY c.expires_at
+		LIMIT $1
+	`, limit)
+	if err != nil {
+		return 0, err
+	}
+	jobs := make([]platformSyncJob, 0, limit)
+	for rows.Next() {
+		var job platformSyncJob
+		if err = rows.Scan(&job.AccountID, &job.OrganizationID, &job.Platform, &job.ExternalID); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		jobs = append(jobs, job)
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return 0, err
+	}
+	rows.Close()
+
+	processed := 0
+	var firstErr error
+	for _, job := range jobs {
+		processed++
+		if refreshErr := s.refreshOAuthTokenWithRetry(ctx, job); refreshErr != nil {
+			if isProviderKind(refreshErr, providerAuth, providerPermission) {
+				if markErr := s.markOAuthReauthRequired(ctx, job, refreshErr); markErr != nil && firstErr == nil {
+					firstErr = markErr
+				}
+			}
+			if firstErr == nil {
+				firstErr = refreshErr
+			}
+		}
+	}
+	return processed, firstErr
+}
+
+func (s *Server) refreshOAuthTokenWithRetry(ctx context.Context, job platformSyncJob) error {
+	const attempts = 3
+	var lastErr error
+	for attempt := 0; attempt < attempts; attempt++ {
+		if _, err := s.accessTokenForSync(ctx, job); err == nil {
+			return nil
+		} else {
+			lastErr = err
+		}
+		if !isProviderKind(lastErr, providerRetryable, providerRateLimit) || attempt == attempts-1 {
+			return lastErr
+		}
+
+		delay := time.Duration(1<<attempt) * 250 * time.Millisecond
+		var providerErr *providerError
+		if errors.As(lastErr, &providerErr) && providerErr.RetryAfter > delay {
+			delay = providerErr.RetryAfter
+		}
+		if delay > 5*time.Second {
+			delay = 5 * time.Second
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return lastErr
+}
+
+func (s *Server) markOAuthReauthRequired(ctx context.Context, job platformSyncJob, refreshErr error) error {
+	message := refreshErr.Error()
+	if len(message) > 500 {
+		message = message[:500]
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	tag, err := tx.Exec(ctx, `
+		UPDATE oauth_connections
+		SET status='REAUTH_REQUIRED',updated_at=now()
+		WHERE platform_account_id=$1 AND organization_id=$2 AND status='ACTIVE'
+		  AND expires_at<=now()+CASE WHEN $3='INSTAGRAM' THEN interval '7 days' ELSE interval '10 minutes' END
+	`, job.AccountID, job.OrganizationID, job.Platform)
+	if err != nil {
+		return err
+	}
+	// A concurrent reconnect may have installed a fresh connection after this
+	// refresh attempt failed. In that case the guarded update above changes no
+	// rows and the new authorization must stay active.
+	if tag.RowsAffected() == 0 {
+		return tx.Commit(ctx)
+	}
+	if _, err = tx.Exec(ctx, `UPDATE platform_accounts SET status='REAUTH_REQUIRED',last_error=$3,updated_at=now() WHERE id=$1 AND organization_id=$2 AND status IN ('ACTIVE','PAUSED')`, job.AccountID, job.OrganizationID, message); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
 // RunPlatformSync claims and processes up to limit due platform accounts.
 // Claims use SKIP LOCKED, so multiple workers can safely execute this method.
 func (s *Server) RunPlatformSync(ctx context.Context, limit int) (int, error) {
@@ -315,15 +436,16 @@ func (s *Server) accessTokenForSync(ctx context.Context, job platformSyncJob) (s
 		return "", &providerError{Platform: job.Platform, Kind: providerAuth, Message: "authorization expired"}
 	}
 	if err != nil {
-		_, _ = tx.Exec(ctx, `UPDATE oauth_connections SET status='REAUTH_REQUIRED',updated_at=now() WHERE platform_account_id=$1`, job.AccountID)
-		_ = tx.Commit(ctx)
-		if isProviderKind(err, providerAuth, providerPermission) {
+		var providerErr *providerError
+		if errors.As(err, &providerErr) {
 			return "", err
 		}
-		return "", &providerError{Platform: job.Platform, Kind: providerAuth, Message: "token refresh failed"}
+		// Network, decoding and other unclassified failures are retryable. They
+		// must not invalidate a still-recoverable OAuth connection.
+		return "", &providerError{Platform: job.Platform, Kind: providerRetryable, Message: "token refresh failed"}
 	}
 	if refreshed.AccessToken == "" {
-		return "", &providerError{Platform: job.Platform, Kind: providerAuth, Message: "token refresh returned an empty token"}
+		return "", &providerError{Platform: job.Platform, Kind: providerSchema, Message: "token refresh returned an empty token"}
 	}
 	newAccess, newAccessNonce, err := s.envelope.Encrypt([]byte(refreshed.AccessToken))
 	if err != nil {
@@ -407,19 +529,25 @@ func (s *Server) refreshInstagramFacebookAccessToken(ctx context.Context, userAc
 		AccessToken string `json:"access_token"`
 		ExpiresIn   int64  `json:"expires_in"`
 	}
-	if err := doJSON(ctx, http.MethodGet, endpoint, "", &userToken); err != nil || userToken.AccessToken == "" {
-		return oauthToken{}, fmt.Errorf("Facebook token refresh failed")
+	if err := newProviderClient("Instagram").JSON(ctx, http.MethodGet, endpoint, "", "", nil, &userToken); err != nil {
+		return oauthToken{}, err
+	}
+	if userToken.AccessToken == "" {
+		return oauthToken{}, &providerError{Platform: "Instagram", Kind: providerSchema, Message: "Facebook token refresh returned an empty token"}
 	}
 	pageURL := strings.TrimRight(s.config.InstagramFacebookGraphAPIBase, "/") + "/" + url.PathEscape(pageID) + "?" + url.Values{
 		"fields":       {"access_token,instagram_business_account"},
 		"access_token": {userToken.AccessToken},
 	}.Encode()
 	var page facebookPage
-	if err := doJSON(ctx, http.MethodGet, pageURL, "", &page); err != nil || page.AccessToken == "" {
-		return oauthToken{}, fmt.Errorf("Facebook Page token refresh failed")
+	if err := newProviderClient("Instagram").JSON(ctx, http.MethodGet, pageURL, "", "", nil, &page); err != nil {
+		return oauthToken{}, err
+	}
+	if page.AccessToken == "" {
+		return oauthToken{}, &providerError{Platform: "Instagram", Kind: providerSchema, Message: "Facebook Page token refresh returned an empty token"}
 	}
 	if page.InstagramBusinessAccount.ID == "" || page.InstagramBusinessAccount.ID != instagramAccountID {
-		return oauthToken{}, fmt.Errorf("Facebook Page is no longer linked to the connected Instagram account")
+		return oauthToken{}, &providerError{Platform: "Instagram", Kind: providerPermission, Message: "Facebook Page is no longer linked to the connected Instagram account"}
 	}
 	return oauthToken{AccessToken: page.AccessToken, RefreshToken: userToken.AccessToken, ExpiresIn: userToken.ExpiresIn}, nil
 }

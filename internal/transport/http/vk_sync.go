@@ -64,19 +64,17 @@ func (s *Server) refreshVKAccessToken(ctx context.Context, refreshToken, deviceI
 		"grant_type": {"refresh_token"}, "redirect_uri": {s.config.VKRedirectURL}, "client_id": {s.config.VKClientID}, "device_id": {deviceID}, "state": {state},
 	}.Encode()
 	form := url.Values{"refresh_token": {refreshToken}}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))
-	if err != nil {
-		return oauthToken{}, err
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	var out struct {
 		AccessToken  string `json:"access_token"`
 		RefreshToken string `json:"refresh_token"`
 		ExpiresIn    int64  `json:"expires_in"`
 		Scope        string `json:"scope"`
 	}
-	if err := doRequestJSON(req, &out); err != nil || out.AccessToken == "" {
-		return oauthToken{}, &providerError{Platform: "VK", Kind: providerAuth, Message: "VK ID token refresh failed"}
+	if err := newProviderClient("VK").JSON(ctx, http.MethodPost, endpoint, "", "application/x-www-form-urlencoded", strings.NewReader(form.Encode()), &out); err != nil {
+		return oauthToken{}, err
+	}
+	if out.AccessToken == "" {
+		return oauthToken{}, &providerError{Platform: "VK", Kind: providerSchema, Message: "VK ID token refresh returned an empty token"}
 	}
 	return oauthToken{AccessToken: out.AccessToken, RefreshToken: out.RefreshToken, ExpiresIn: out.ExpiresIn, Scopes: splitScopes(out.Scope, nil)}, nil
 }

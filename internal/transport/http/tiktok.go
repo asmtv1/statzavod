@@ -321,15 +321,39 @@ func (s *Server) doTikTokJSON(req *http.Request, target any) error {
 	client := &http.Client{Timeout: 15 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return err
+		return &providerError{Platform: "TikTok", Kind: providerRetryable, Message: "network request failed"}
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("TikTok API returned %s", resp.Status)
-	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if err != nil {
-		return fmt.Errorf("read TikTok API response: %w", err)
+		return &providerError{Platform: "TikTok", Kind: providerRetryable, Message: "could not read API response"}
+	}
+	var envelope struct {
+		Error            json.RawMessage `json:"error"`
+		ErrorDescription string          `json:"error_description"`
+		LogID            string          `json:"log_id"`
+	}
+	envelopeErr := json.Unmarshal(body, &envelope)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		kind := providerPermanent
+		switch {
+		case resp.StatusCode == http.StatusUnauthorized:
+			kind = providerAuth
+		case resp.StatusCode == http.StatusForbidden:
+			kind = providerPermission
+		case resp.StatusCode == http.StatusTooManyRequests:
+			kind = providerRateLimit
+		case resp.StatusCode >= 500:
+			kind = providerRetryable
+		}
+		message := resp.Status
+		if code, detail, _ := tikTokAPIError(envelope.Error, envelope.ErrorDescription, envelope.LogID); code != "" {
+			message = code + ": " + detail
+			if classified := classifyTikTokError(code); classified != providerPermanent {
+				kind = classified
+			}
+		}
+		return &providerError{Platform: "TikTok", Kind: kind, StatusCode: resp.StatusCode, RetryAfter: parseRetryAfter(resp.Header.Get("Retry-After")), Message: message}
 	}
 	if len(bytes.TrimSpace(body)) == 0 {
 		if target == nil {
@@ -337,19 +361,14 @@ func (s *Server) doTikTokJSON(req *http.Request, target any) error {
 		}
 		return fmt.Errorf("decode TikTok API response: empty response body")
 	}
-	var envelope struct {
-		Error            json.RawMessage `json:"error"`
-		ErrorDescription string          `json:"error_description"`
-		LogID            string          `json:"log_id"`
-	}
-	if err := json.Unmarshal(body, &envelope); err != nil {
-		return fmt.Errorf("decode TikTok API response: %w", err)
+	if envelopeErr != nil {
+		return fmt.Errorf("decode TikTok API response: %w", envelopeErr)
 	}
 	if code, message, logID := tikTokAPIError(envelope.Error, envelope.ErrorDescription, envelope.LogID); code != "" {
 		if logID != "" {
-			return fmt.Errorf("TikTok API error %s: %s (log_id %s)", code, message, logID)
+			message = fmt.Sprintf("%s (log_id %s)", message, logID)
 		}
-		return fmt.Errorf("TikTok API error %s: %s", code, message)
+		return &providerError{Platform: "TikTok", Kind: classifyTikTokError(code), Message: code + ": " + message}
 	}
 	if target == nil {
 		return nil
@@ -358,6 +377,23 @@ func (s *Server) doTikTokJSON(req *http.Request, target any) error {
 		return fmt.Errorf("decode TikTok API payload: %w", err)
 	}
 	return nil
+}
+
+func classifyTikTokError(code string) providerErrorKind {
+	value := strings.ToLower(strings.TrimSpace(code))
+	switch {
+	case value == "invalid_grant",
+		strings.Contains(value, "token") && (strings.Contains(value, "invalid") || strings.Contains(value, "expired") || strings.Contains(value, "revoked")):
+		return providerAuth
+	case strings.Contains(value, "scope") || strings.Contains(value, "permission"):
+		return providerPermission
+	case strings.Contains(value, "rate") || strings.Contains(value, "too_many"):
+		return providerRateLimit
+	case strings.Contains(value, "server") || strings.Contains(value, "internal") || strings.Contains(value, "temporar"):
+		return providerRetryable
+	default:
+		return providerPermanent
+	}
 }
 
 func tikTokAPIError(raw json.RawMessage, description, logID string) (string, string, string) {

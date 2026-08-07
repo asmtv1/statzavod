@@ -176,10 +176,20 @@ func (c providerClient) decodeResponse(resp *http.Response, target any) error {
 		case string:
 			if strings.TrimSpace(value) != "" {
 				message = value
+				// OAuth token endpoints commonly report a revoked or invalid
+				// refresh token as HTTP 400 + invalid_grant rather than 401.
+				if resp.StatusCode == http.StatusBadRequest && strings.EqualFold(strings.TrimSpace(value), "invalid_grant") {
+					kind = providerAuth
+				}
 			}
 		case map[string]any:
 			if text, ok := value["message"].(string); ok && strings.TrimSpace(text) != "" {
 				message = text
+			}
+			// Meta Graph reports invalid/revoked OAuth tokens as HTTP 400 with
+			// error code 190 instead of an HTTP authorization status.
+			if code, ok := value["code"].(float64); ok && int(code) == 190 {
+				kind = providerAuth
 			}
 		}
 	}

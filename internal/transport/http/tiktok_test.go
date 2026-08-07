@@ -35,6 +35,18 @@ func TestTikTokAPIError(t *testing.T) {
 	}
 }
 
+func TestClassifyTikTokRefreshErrors(t *testing.T) {
+	if got := classifyTikTokError("invalid_refresh_token"); got != providerAuth {
+		t.Fatalf("expected auth error, got %s", got)
+	}
+	if got := classifyTikTokError("rate_limit_exceeded"); got != providerRateLimit {
+		t.Fatalf("expected rate-limit error, got %s", got)
+	}
+	if got := classifyTikTokError("internal_error"); got != providerRetryable {
+		t.Fatalf("expected retryable error, got %s", got)
+	}
+}
+
 func TestRevokeTikTokAcceptsEmptyResponse(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.URL.Path != "/v2/oauth/revoke/" {

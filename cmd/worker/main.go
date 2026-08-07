@@ -23,6 +23,13 @@ func main() {
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
 	for {
+		refreshCtx, cancelRefresh := context.WithTimeout(context.Background(), 2*time.Minute)
+		refreshed, refreshErr := server.RunOAuthTokenRefresh(refreshCtx, 50)
+		cancelRefresh()
+		if refreshErr != nil {
+			log.Printf("OAuth token refresh (%d processed): %v", refreshed, refreshErr)
+		}
+
 		// Instagram imports enrich every publication with a separate Insights
 		// request. Accounts with dozens of publications can legitimately take
 		// longer than one minute, especially when collaborative media is included.
