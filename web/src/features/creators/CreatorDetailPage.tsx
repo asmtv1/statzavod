@@ -497,6 +497,7 @@ export function CreatorDetailPage() {
   const navigate = useNavigate()
   const [contact, setContact] = useState('')
   const [archiveConfirmation, setArchiveConfirmation] = useState(false)
+  const [deleteConfirmation, setDeleteConfirmation] = useState(false)
   const client = useQueryClient()
   const creator = useQuery({ queryKey: ['creator', id, locale], queryFn: () => api.creator(id), enabled: Boolean(id) })
   const addContact = useMutation({ mutationFn: () => api.createContact(id, { kind: 'EMAIL', value: contact, isPrimary: !creator.data?.contacts.length }), onSuccess: () => { setContact(''); client.invalidateQueries({ queryKey: ['creator', id] }) } })
@@ -515,11 +516,51 @@ export function CreatorDetailPage() {
     },
   })
   const restore = useMutation({ mutationFn: () => api.restoreCreator(id), onSuccess: refreshCreatorLists })
+  const removeCreator = useMutation({
+    mutationFn: () => api.deleteCreator(id),
+    onSuccess: async () => {
+      setDeleteConfirmation(false)
+      await Promise.all([
+        client.cancelQueries({ queryKey: ['creator', id] }),
+        client.cancelQueries({ queryKey: ['creator-history', id] }),
+        client.cancelQueries({ queryKey: ['creator-credentials', id] }),
+        client.cancelQueries({ queryKey: ['creator-vk-access', id] }),
+        client.cancelQueries({ queryKey: ['creator-analytics', id] }),
+        client.cancelQueries({ queryKey: ['platform-connections', id] }),
+      ])
+      navigate('/app/creators')
+      client.removeQueries({ queryKey: ['creator', id] })
+      client.removeQueries({ queryKey: ['creator-history', id] })
+      client.removeQueries({ queryKey: ['creator-credentials', id] })
+      client.removeQueries({ queryKey: ['creator-vk-access', id] })
+      client.removeQueries({ queryKey: ['creator-analytics', id] })
+      client.removeQueries({ queryKey: ['platform-connections', id] })
+      await Promise.all([
+        client.invalidateQueries({ queryKey: ['creators'] }),
+        client.invalidateQueries({ queryKey: ['companies'] }),
+        client.invalidateQueries({ queryKey: ['summary'] }),
+        client.invalidateQueries({ queryKey: ['timeseries'] }),
+        client.invalidateQueries({ queryKey: ['integrations'] }),
+        client.invalidateQueries({ queryKey: ['publications'] }),
+        client.invalidateQueries({ queryKey: ['content-groups'] }),
+        client.invalidateQueries({ queryKey: ['sync-health'] }),
+      ])
+    },
+  })
+  const openDeleteConfirmation = () => {
+    removeCreator.reset()
+    setDeleteConfirmation(true)
+  }
+  const closeDeleteConfirmation = () => {
+    if (removeCreator.isPending) return
+    removeCreator.reset()
+    setDeleteConfirmation(false)
+  }
   if (creator.isPending) return <p>{t('Загружаем карточку креатора…')}</p>
   if (creator.isError) return <p className={styles.error}>{t(creator.error.message)}</p>
   return <section className={styles.page}>
     <Link to="/app/creators" className={styles.back}>← {t('Креаторы')}</Link>
-    <header><div><p>{t('КАРТОЧКА КРЕАТОРА')}</p><h1>{creator.data.displayName}</h1></div><div className={styles.headerActions}>{creator.data.telegramUsername && <a className={styles.telegram} href={`https://t.me/${creator.data.telegramUsername}`} target="_blank" rel="noreferrer">{t('Открыть Telegram')}</a>}{creator.data.archivedAt ? <button type="button" className={styles.restoreButton} onClick={() => restore.mutate()} disabled={restore.isPending}>{restore.isPending ? t('Восстанавливаем…') : t('Восстановить')}</button> : <button type="button" className={styles.archiveButton} onClick={() => setArchiveConfirmation(true)}>{t('В архив')}</button>}</div></header>
+    <header><div><p>{t('КАРТОЧКА КРЕАТОРА')}</p><h1>{creator.data.displayName}</h1></div><div className={styles.headerActions}>{creator.data.telegramUsername && <a className={styles.telegram} href={`https://t.me/${creator.data.telegramUsername}`} target="_blank" rel="noreferrer">{t('Открыть Telegram')}</a>}{creator.data.archivedAt ? <button type="button" className={styles.restoreButton} onClick={() => restore.mutate()} disabled={restore.isPending}>{restore.isPending ? t('Восстанавливаем…') : t('Восстановить')}</button> : <button type="button" className={styles.archiveButton} onClick={() => setArchiveConfirmation(true)}>{t('В архив')}</button>}{creator.data.canDelete ? <button type="button" className={styles.deleteButton} onClick={openDeleteConfirmation}>{t('Удалить')}</button> : null}</div></header>
     {creator.data.archivedAt ? <div className={styles.archiveNotice}><span>{t('АРХИВ')}</span><div><b>{t('Карточка не показывается в рабочих списках и на дашборде')}</b><small>{t('Перенесена')} {historyDateFormatter.format(new Date(creator.data.archivedAt))}. {t('Все данные, доступы и история сохранены.')}</small></div></div> : null}
     {restore.isError ? <p className={styles.error}>{t('Не удалось восстановить карточку:')} {t(restore.error.message)}</p> : null}
     <CreatorProfile creator={creator.data} creatorID={id}/>
@@ -528,5 +569,6 @@ export function CreatorDetailPage() {
     <PlatformConnections creatorID={id}/>
     <section className={styles.contacts}><div className={styles.sectionHead}><div><h2>{t('Контакты')}</h2><p>{t('Дополнительные способы связи.')}</p></div></div>{creator.data.contacts.map(c => <p key={c.id}>{c.kind}: {c.value}</p>)}<form onSubmit={event => { event.preventDefault(); if (contact) addContact.mutate() }}><input value={contact} onChange={event => setContact(event.target.value)} placeholder="Email"/><button>{t('Добавить')}</button></form></section>
     {archiveConfirmation ? <div className={styles.dialogBackdrop} role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !archive.isPending) setArchiveConfirmation(false) }}><div className={`${styles.confirmDialog} ${styles.archiveDialog}`} role="dialog" aria-modal="true" aria-labelledby="archive-creator-title"><div><span className={styles.archiveDialogMark}>↘</span><div><h3 id="archive-creator-title">{t('Перенести креатора в архив?')}</h3><p>{creator.data.displayName}</p></div></div><p>{t('Карточка исчезнет из рабочих списков и дашборда. Профиль, доступы, статистика и история изменений сохранятся — креатора можно восстановить в любой момент.')}</p>{archive.isError ? <p className={styles.error}>{t('Не удалось перенести карточку:')} {t(archive.error.message)}</p> : null}<div className={styles.dialogActions}><button type="button" onClick={() => setArchiveConfirmation(false)} disabled={archive.isPending}>{t('Отмена')}</button><button type="button" className={styles.confirmArchive} onClick={() => archive.mutate()} disabled={archive.isPending}>{archive.isPending ? t('Переносим…') : t('Перенести в архив')}</button></div></div></div> : null}
+    {deleteConfirmation ? <div className={styles.dialogBackdrop} role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) closeDeleteConfirmation() }}><div className={styles.confirmDialog} role="dialog" aria-modal="true" aria-labelledby="delete-creator-title"><div><span className={styles.dialogMark}>!</span><div><h3 id="delete-creator-title">{t('Удалить креатора навсегда?')}</h3><p>{creator.data.displayName}</p></div></div><p>{t('Это действие необратимо. Карточка креатора, история изменений и все связанные данные будут удалены навсегда. Все привязанные аккаунты будут отвязаны.')}</p>{removeCreator.isError ? <p className={styles.error}>{t('Не удалось удалить креатора:')} {t(removeCreator.error.message)}</p> : null}<div className={styles.dialogActions}><button type="button" onClick={closeDeleteConfirmation} disabled={removeCreator.isPending}>{t('Отмена')}</button><button type="button" className={styles.confirmDanger} onClick={() => removeCreator.mutate()} disabled={removeCreator.isPending}>{removeCreator.isPending ? t('Удаляем…') : t('Удалить навсегда')}</button></div></div></div> : null}
   </section>
 }

@@ -30,10 +30,13 @@
 .headerActions {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 0.65rem;
 }
 .archiveButton,
-.restoreButton {
+.restoreButton,
+.deleteButton {
   padding: .67rem .9rem;
   border-radius: .55rem;
   font: inherit;
@@ -50,6 +53,15 @@
   color: #bcefd0;
   background: rgb(156 229 189 / 12%);
   border: 1px solid rgb(156 229 189 / 24%);
+}
+.deleteButton {
+  color: #ffb2a9;
+  background: rgb(173 63 51 / 12%);
+  border: 1px solid rgb(255 143 128 / 28%);
+}
+.deleteButton:hover {
+  color: #fff1ef;
+  background: rgb(173 63 51 / 28%);
 }
 .archiveNotice {
   display: flex;

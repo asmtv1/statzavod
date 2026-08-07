@@ -117,6 +117,7 @@ func (s *Server) Router() http.Handler {
 			r.With(s.require("ADMIN", "ANALYST")).Post("/creators/{id}/contacts", s.createContact)
 			r.With(s.require("ADMIN", "ANALYST")).Post("/creators/{id}/archive", s.archiveCreator)
 			r.With(s.require("ADMIN", "ANALYST")).Post("/creators/{id}/restore", s.restoreCreator)
+			r.With(s.require("ADMIN", "ANALYST")).Delete("/creators/{id}", s.deleteCreator)
 			r.Get("/publications", s.listPublications)
 			r.Get("/content-groups", s.listContentGroups)
 			r.With(s.require("ADMIN", "ANALYST")).Post("/content-groups", s.createContentGroup)
@@ -289,7 +290,7 @@ func (s *Server) createCreator(w http.ResponseWriter, r *http.Request) {
 		}
 		companyID = in.CompanyID
 	}
-	err := s.pool.QueryRow(r.Context(), `INSERT INTO creators(organization_id,company_id,first_name,last_name,middle_name,display_name,internal_note,telegram_username) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`, p.OrganizationID, companyID, in.FirstName, in.LastName, in.MiddleName, in.DisplayName, in.InternalNote, normalizeTelegram(in.TelegramUsername)).Scan(&id)
+	err := s.pool.QueryRow(r.Context(), `INSERT INTO creators(organization_id,company_id,first_name,last_name,middle_name,display_name,internal_note,telegram_username,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`, p.OrganizationID, companyID, in.FirstName, in.LastName, in.MiddleName, in.DisplayName, in.InternalNote, normalizeTelegram(in.TelegramUsername), p.ID).Scan(&id)
 	if err != nil {
 		problem(w, 500, "creation failed", err.Error())
 		return
@@ -302,7 +303,8 @@ func (s *Server) getCreator(w http.ResponseWriter, r *http.Request) {
 	p := r.Context().Value(principalKey).(principal)
 	var first, last, middle, display, status, note, telegram, companyID, companyName, workStatus, workComment string
 	var archivedAt *time.Time
-	err := s.pool.QueryRow(r.Context(), `SELECT c.first_name,c.last_name,COALESCE(c.middle_name,''),c.display_name,c.status,c.internal_note,c.telegram_username,COALESCE(c.company_id::text,''),COALESCE(x.name,''),c.work_status,c.work_comment,c.archived_at FROM creators c LEFT JOIN companies x ON x.id=c.company_id WHERE c.id=$1 AND c.organization_id=$2`, id, p.OrganizationID).Scan(&first, &last, &middle, &display, &status, &note, &telegram, &companyID, &companyName, &workStatus, &workComment, &archivedAt)
+	var canDelete bool
+	err := s.pool.QueryRow(r.Context(), `SELECT c.first_name,c.last_name,COALESCE(c.middle_name,''),c.display_name,c.status,c.internal_note,c.telegram_username,COALESCE(c.company_id::text,''),COALESCE(x.name,''),c.work_status,c.work_comment,c.archived_at,($3='ADMIN' OR COALESCE($3='ANALYST' AND c.created_by=$4,false)) FROM creators c LEFT JOIN companies x ON x.id=c.company_id WHERE c.id=$1 AND c.organization_id=$2`, id, p.OrganizationID, p.Role, p.ID).Scan(&first, &last, &middle, &display, &status, &note, &telegram, &companyID, &companyName, &workStatus, &workComment, &archivedAt, &canDelete)
 	if err == pgx.ErrNoRows {
 		problem(w, 404, "not found", "creator does not exist")
 		return
@@ -327,7 +329,7 @@ func (s *Server) getCreator(w http.ResponseWriter, r *http.Request) {
 		}
 		contacts = append(contacts, map[string]any{"id": cid, "kind": kind, "value": value, "label": label, "isPrimary": primary})
 	}
-	writeJSON(w, 200, map[string]any{"id": id, "firstName": first, "lastName": last, "middleName": middle, "displayName": display, "status": status, "internalNote": note, "archivedAt": archivedAt, "telegramUsername": telegram, "companyId": companyID, "companyName": companyName, "workStatus": workStatus, "workComment": workComment, "contacts": contacts})
+	writeJSON(w, 200, map[string]any{"id": id, "firstName": first, "lastName": last, "middleName": middle, "displayName": display, "status": status, "internalNote": note, "archivedAt": archivedAt, "telegramUsername": telegram, "companyId": companyID, "companyName": companyName, "workStatus": workStatus, "workComment": workComment, "contacts": contacts, "canDelete": canDelete})
 }
 func (s *Server) createContact(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
@@ -466,6 +468,42 @@ func (s *Server) restoreCreator(w http.ResponseWriter, r *http.Request) {
 	}
 	if err = tx.Commit(r.Context()); err != nil {
 		problem(w, http.StatusInternalServerError, "restore failed", "could not commit restore")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) deleteCreator(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	p := r.Context().Value(principalKey).(principal)
+	tx, err := s.pool.Begin(r.Context())
+	if err != nil {
+		problem(w, http.StatusInternalServerError, "deletion failed", "could not start deletion")
+		return
+	}
+	defer tx.Rollback(r.Context())
+
+	// Creator-owned rows are removed by database cascades. Platform accounts are
+	// intentionally not creator-owned and survive; only their assignments vanish.
+	tag, err := tx.Exec(r.Context(), `DELETE FROM creators WHERE id=$1 AND organization_id=$2 AND ($3='ADMIN' OR ($3='ANALYST' AND created_by=$4))`, id, p.OrganizationID, p.Role, p.ID)
+	if err != nil {
+		problem(w, http.StatusInternalServerError, "deletion failed", "could not delete creator")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		problem(w, http.StatusNotFound, "not found", "creator does not exist")
+		return
+	}
+	if _, err = tx.Exec(r.Context(), `DELETE FROM audit_logs WHERE organization_id=$1 AND entity_type='CREATOR' AND entity_id=$2`, p.OrganizationID, id); err != nil {
+		problem(w, http.StatusInternalServerError, "deletion failed", "could not remove creator audit history")
+		return
+	}
+	if _, err = tx.Exec(r.Context(), `INSERT INTO audit_logs(organization_id,actor_id,action,entity_type,entity_id) VALUES($1,$2,'DELETE','CREATOR',$3)`, p.OrganizationID, p.ID, id); err != nil {
+		problem(w, http.StatusInternalServerError, "deletion failed", "could not write audit log")
+		return
+	}
+	if err = tx.Commit(r.Context()); err != nil {
+		problem(w, http.StatusInternalServerError, "deletion failed", "could not commit deletion")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

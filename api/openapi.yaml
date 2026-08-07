@@ -47,6 +47,15 @@ paths:
       summary: Create creator
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreatorInput' } } } }
       responses: { '201': { description: Created }, '400': { $ref: '#/components/responses/Problem' } }
+  /creators/{id}:
+    get:
+      summary: Get creator details and the current principal's delete capability
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses: { '200': { description: Creator detail including computed canDelete boolean }, '404': { $ref: '#/components/responses/Problem' } }
+    delete:
+      summary: Permanently delete a creator and all creator-owned data (admin, or owning analyst)
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses: { '204': { description: Deleted; linked platform accounts remain unassigned }, '403': { description: Current role cannot delete creators }, '404': { description: Creator does not exist or is not owned by the current analyst } }
   /companies:
     get: { summary: List companies in the current organization, responses: { '200': { description: Company list } } }
     post:
