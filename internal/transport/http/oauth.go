@@ -143,6 +143,7 @@ func (s *Server) oauthAuthorize(w http.ResponseWriter, r *http.Request) {
 	case "INSTAGRAM":
 		if provider.Flow == "FACEBOOK" {
 			q.Set("config_id", s.config.InstagramFacebookConfigID)
+			q.Set("scope", strings.Join(provider.Scopes, ","))
 			q.Set("override_default_response_type", "true")
 			q.Set("auth_type", "rerequest")
 		} else {
