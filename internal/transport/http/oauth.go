@@ -59,6 +59,11 @@ type facebookPage struct {
 	} `json:"instagram_business_account"`
 }
 
+type facebookBusiness struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
 type instagramFacebookCandidate struct {
 	Token   oauthToken      `json:"token"`
 	Profile platformProfile `json:"profile"`
@@ -80,7 +85,7 @@ func (s *Server) oauthProviders() map[string]oauthProvider {
 		"instagram-facebook": {
 			ID: "INSTAGRAM", Name: "Instagram через Facebook", ClientID: s.config.InstagramFacebookClientID, ClientSecret: s.config.InstagramFacebookClientSecret,
 			RedirectURL: s.config.InstagramFacebookRedirectURL, AuthorizeURL: strings.TrimRight(s.config.InstagramFacebookOAuthBase, "/") + "/dialog/oauth",
-			Scopes: []string{"instagram_basic", "instagram_manage_insights", "pages_show_list", "pages_read_engagement"}, Flow: "FACEBOOK",
+			Scopes: []string{"instagram_basic", "instagram_manage_insights", "pages_show_list", "pages_read_engagement", "business_management"}, Flow: "FACEBOOK",
 		},
 		"tiktok": {
 			ID: "TIKTOK", Name: "TikTok", ClientID: s.config.TikTokClientKey, ClientSecret: s.config.TikTokClientSecret,
@@ -174,7 +179,9 @@ func configureInstagramAuthorization(query url.Values, provider oauthProvider, f
 	}
 	// Facebook Login for Business gets permissions and Page asset selection
 	// from config_id. Meta documents config_id as the replacement for scope;
-	// sending both can produce an ordinary user consent without Page assets.
+	// sending both can produce an ordinary user consent without Page assets. The
+	// config must include business_management: we use it after OAuth to enumerate
+	// Business Portfolios and their owned Pages.
 	query.Del("scope")
 	query.Set("config_id", facebookConfigID)
 	query.Set("override_default_response_type", "true")
@@ -412,10 +419,12 @@ func (s *Server) discoverInstagramFacebookAccounts(ctx context.Context, provider
 	if len(missing) > 0 {
 		return nil, fmt.Errorf("Facebook permissions were not granted: %s", strings.Join(missing, ", "))
 	}
-	pages, err := s.fetchFacebookPages(ctx, token.AccessToken)
-	if err != nil {
+	businessPages, businessErr := s.fetchFacebookBusinessPortfolioPages(ctx, token.AccessToken)
+	directPages, directErr := s.fetchFacebookPages(ctx, token.AccessToken)
+	if businessErr != nil && directErr != nil {
 		return nil, fmt.Errorf("Facebook Pages are unavailable")
 	}
+	pages := mergeFacebookPages(businessPages, directPages)
 	linkedPages := make([]facebookPage, 0, len(pages))
 	for _, page := range pages {
 		if page.InstagramBusinessAccount.ID != "" {
@@ -494,6 +503,145 @@ func (s *Server) fetchFacebookPages(ctx context.Context, userAccessToken string)
 		seenCursors[after] = struct{}{}
 		query.Set("after", after)
 	}
+}
+
+func (s *Server) fetchFacebookBusinessPortfolioPages(ctx context.Context, userAccessToken string) ([]facebookPage, error) {
+	base := strings.TrimRight(s.config.InstagramFacebookGraphAPIBase, "/")
+	query := url.Values{
+		"fields":       {"id,name"},
+		"limit":        {"100"},
+		"access_token": {userAccessToken},
+	}
+	businesses := make([]facebookBusiness, 0)
+	seenCursors := make(map[string]struct{})
+	for {
+		var response struct {
+			Data   []facebookBusiness `json:"data"`
+			Paging struct {
+				Next    string `json:"next"`
+				Cursors struct {
+					After string `json:"after"`
+				} `json:"cursors"`
+			} `json:"paging"`
+		}
+		if err := doJSON(ctx, http.MethodGet, base+"/me/businesses?"+query.Encode(), "", &response); err != nil {
+			return nil, err
+		}
+		businesses = append(businesses, response.Data...)
+		after := response.Paging.Cursors.After
+		if response.Paging.Next == "" || after == "" || len(response.Data) == 0 {
+			break
+		}
+		if _, seen := seenCursors[after]; seen {
+			return nil, fmt.Errorf("Facebook Business pagination repeated a cursor")
+		}
+		seenCursors[after] = struct{}{}
+		query.Set("after", after)
+	}
+
+	pages := make([]facebookPage, 0)
+	seenPages := make(map[string]struct{})
+	var lastErr error
+	for _, business := range businesses {
+		if business.ID == "" {
+			continue
+		}
+		businessPages, err := s.fetchFacebookBusinessOwnedPages(ctx, business.ID, userAccessToken)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		for _, businessPage := range businessPages {
+			if businessPage.ID == "" {
+				continue
+			}
+			if _, seen := seenPages[businessPage.ID]; seen {
+				continue
+			}
+			page, pageErr := s.fetchFacebookPage(ctx, businessPage.ID, userAccessToken)
+			if pageErr != nil {
+				lastErr = pageErr
+				continue
+			}
+			seenPages[page.ID] = struct{}{}
+			pages = append(pages, page)
+		}
+	}
+	if len(pages) == 0 && lastErr != nil {
+		return nil, lastErr
+	}
+	return pages, nil
+}
+
+func (s *Server) fetchFacebookBusinessOwnedPages(ctx context.Context, businessID, userAccessToken string) ([]facebookPage, error) {
+	base := strings.TrimRight(s.config.InstagramFacebookGraphAPIBase, "/") + "/" + url.PathEscape(businessID) + "/owned_pages"
+	query := url.Values{
+		"fields":       {"id,name"},
+		"limit":        {"100"},
+		"access_token": {userAccessToken},
+	}
+	pages := make([]facebookPage, 0)
+	seenCursors := make(map[string]struct{})
+	for {
+		var response struct {
+			Data   []facebookPage `json:"data"`
+			Paging struct {
+				Next    string `json:"next"`
+				Cursors struct {
+					After string `json:"after"`
+				} `json:"cursors"`
+			} `json:"paging"`
+		}
+		if err := doJSON(ctx, http.MethodGet, base+"?"+query.Encode(), "", &response); err != nil {
+			return nil, err
+		}
+		pages = append(pages, response.Data...)
+		after := response.Paging.Cursors.After
+		if response.Paging.Next == "" || after == "" || len(response.Data) == 0 {
+			return pages, nil
+		}
+		if _, seen := seenCursors[after]; seen {
+			return nil, fmt.Errorf("Facebook Business Page pagination repeated a cursor")
+		}
+		seenCursors[after] = struct{}{}
+		query.Set("after", after)
+	}
+}
+
+func (s *Server) fetchFacebookPage(ctx context.Context, pageID, userAccessToken string) (facebookPage, error) {
+	endpoint := strings.TrimRight(s.config.InstagramFacebookGraphAPIBase, "/") + "/" + url.PathEscape(pageID) + "?" + url.Values{
+		"fields":       {"id,name,access_token,tasks,instagram_business_account"},
+		"access_token": {userAccessToken},
+	}.Encode()
+	var page facebookPage
+	if err := doJSON(ctx, http.MethodGet, endpoint, "", &page); err != nil {
+		return facebookPage{}, err
+	}
+	if page.ID == "" || page.AccessToken == "" {
+		return facebookPage{}, fmt.Errorf("Facebook Business Page access token is unavailable")
+	}
+	return page, nil
+}
+
+func mergeFacebookPages(pageSets ...[]facebookPage) []facebookPage {
+	pages := make([]facebookPage, 0)
+	seen := make(map[string]int)
+	for _, pageSet := range pageSets {
+		for _, page := range pageSet {
+			if page.ID == "" {
+				continue
+			}
+			if index, ok := seen[page.ID]; ok {
+				if pages[index].AccessToken == "" && page.AccessToken != "" {
+					pages[index] = page
+				}
+				continue
+			}
+			seen[page.ID] = len(pages)
+			pages = append(pages, page)
+		}
+	}
+	return pages
 }
 
 func (s *Server) fetchFacebookInstagramAccount(ctx context.Context, accountID, pageAccessToken string) (instagramAccount, error) {

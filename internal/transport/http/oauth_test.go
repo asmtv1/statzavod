@@ -131,6 +131,7 @@ func TestCompleteInstagramFacebookOAuthUsesLinkedPageAccessToken(t *testing.T) {
 			map[string]any{"permission": "instagram_manage_insights", "status": "granted"},
 			map[string]any{"permission": "pages_show_list", "status": "granted"},
 			map[string]any{"permission": "pages_read_engagement", "status": "granted"},
+			map[string]any{"permission": "business_management", "status": "granted"},
 		}})
 	})
 	mux.HandleFunc("/me", func(w http.ResponseWriter, r *http.Request) {
@@ -176,7 +177,7 @@ func TestCompleteInstagramFacebookOAuthUsesLinkedPageAccessToken(t *testing.T) {
 	s := &Server{config: config.Config{InstagramFacebookGraphAPIBase: server.URL}}
 	provider := oauthProvider{
 		ID: "INSTAGRAM", ClientID: "facebook-client", ClientSecret: "facebook-secret", RedirectURL: "https://app.test/callback", Flow: "FACEBOOK",
-		Scopes: []string{"instagram_basic", "instagram_manage_insights", "pages_show_list", "pages_read_engagement"},
+		Scopes: []string{"instagram_basic", "instagram_manage_insights", "pages_show_list", "pages_read_engagement", "business_management"},
 	}
 	token, profile, err := s.completeInstagramFacebookOAuth(t.Context(), provider, "code")
 	if err != nil {
@@ -234,6 +235,58 @@ func TestDiscoverInstagramFacebookAccountsReturnsEveryLinkedPage(t *testing.T) {
 	}
 	if candidates[0].Token.AccessToken != "page-token-1" || candidates[1].Token.AccessToken != "page-token-2" || candidates[0].Token.RefreshToken != "long-user-token" {
 		t.Fatalf("unexpected candidate tokens: %#v", candidates)
+	}
+}
+
+func TestFetchFacebookBusinessPortfolioPagesUsesBusinessManagementEdges(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/me/businesses", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("access_token") != "user-token" || r.URL.Query().Get("fields") != "id,name" {
+			t.Fatalf("unexpected Business Portfolio request: %s", r.URL.RawQuery)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"data": []any{map[string]any{"id": "business-1", "name": "Creator Portfolio"}}})
+	})
+	mux.HandleFunc("/business-1/owned_pages", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("access_token") != "user-token" || r.URL.Query().Get("fields") != "id,name" {
+			t.Fatalf("unexpected owned Pages request: %s", r.URL.RawQuery)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"data": []any{map[string]any{"id": "page-1", "name": "Creator Page"}}})
+	})
+	mux.HandleFunc("/page-1", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("access_token") != "user-token" {
+			t.Fatal("user access token was not used to resolve the Business Page")
+		}
+		fields := r.URL.Query().Get("fields")
+		for _, field := range []string{"access_token", "tasks", "instagram_business_account"} {
+			if !strings.Contains(fields, field) {
+				t.Fatalf("Business Page fields %q do not contain %q", fields, field)
+			}
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"id": "page-1", "name": "Creator Page", "access_token": "page-token",
+			"instagram_business_account": map[string]any{"id": "ig-1"},
+		})
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	s := &Server{config: config.Config{InstagramFacebookGraphAPIBase: server.URL}}
+	pages, err := s.fetchFacebookBusinessPortfolioPages(t.Context(), "user-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pages) != 1 || pages[0].ID != "page-1" || pages[0].AccessToken != "page-token" || pages[0].InstagramBusinessAccount.ID != "ig-1" {
+		t.Fatalf("unexpected Business Portfolio Pages: %#v", pages)
+	}
+}
+
+func TestMergeFacebookPagesKeepsBusinessPageAccessToken(t *testing.T) {
+	pages := mergeFacebookPages(
+		[]facebookPage{{ID: "page-1", Name: "Business Page", AccessToken: "business-token"}},
+		[]facebookPage{{ID: "page-1", Name: "Direct Page", AccessToken: "direct-token"}, {ID: "page-2", Name: "Direct only", AccessToken: "page-2-token"}},
+	)
+	if len(pages) != 2 || pages[0].AccessToken != "business-token" || pages[1].ID != "page-2" {
+		t.Fatalf("unexpected merged Pages: %#v", pages)
 	}
 }
 
