@@ -59,6 +59,11 @@ type facebookPage struct {
 	} `json:"instagram_business_account"`
 }
 
+type instagramFacebookCandidate struct {
+	Token   oauthToken      `json:"token"`
+	Profile platformProfile `json:"profile"`
+}
+
 func (s *Server) oauthProviders() map[string]oauthProvider {
 	return map[string]oauthProvider{
 		"youtube": {
@@ -231,9 +236,10 @@ func (s *Server) oauthCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	hash := sha256.Sum256([]byte(state))
 	var organizationID string
+	var initiatedBy string
 	var creatorID, companyVKAccountID *string
 	var encryptedVerifier, nonce []byte
-	err := s.pool.QueryRow(r.Context(), `UPDATE oauth_states SET consumed_at=now() WHERE state_hash=$1 AND platform=$2 AND consumed_at IS NULL AND expires_at>now() RETURNING organization_id,creator_id,company_vk_account_id,pkce_verifier_ciphertext,nonce`, hash[:], provider.ID).Scan(&organizationID, &creatorID, &companyVKAccountID, &encryptedVerifier, &nonce)
+	err := s.pool.QueryRow(r.Context(), `UPDATE oauth_states SET consumed_at=now() WHERE state_hash=$1 AND platform=$2 AND consumed_at IS NULL AND expires_at>now() RETURNING organization_id,creator_id,company_vk_account_id,pkce_verifier_ciphertext,nonce,initiated_by`, hash[:], provider.ID).Scan(&organizationID, &creatorID, &companyVKAccountID, &encryptedVerifier, &nonce, &initiatedBy)
 	if err != nil {
 		s.redirectToApp(w, r, "/login?oauth="+platformKey+"-expired")
 		return
@@ -265,6 +271,22 @@ func (s *Server) oauthCallback(w http.ResponseWriter, r *http.Request) {
 	verifier, err := s.envelope.Decrypt(encryptedVerifier, nonce)
 	if err != nil {
 		redirect("state-error")
+		return
+	}
+	if provider.Flow == "FACEBOOK" && creatorID != nil {
+		candidates, discoverErr := s.discoverInstagramFacebookAccounts(r.Context(), provider, code)
+		if discoverErr != nil {
+			log.Printf("%s OAuth completion failed: %v", provider.Name, discoverErr)
+			redirect("provider-error")
+			return
+		}
+		selectionID, selectionErr := s.createInstagramAccountSelection(r.Context(), organizationID, *creatorID, initiatedBy, candidates)
+		if selectionErr != nil {
+			log.Printf("%s OAuth selection creation failed: %v", provider.Name, selectionErr)
+			redirect("save-error")
+			return
+		}
+		s.redirectToApp(w, r, "/app/creators/"+*creatorID+"?platform="+url.QueryEscape(platformKey)+"&oauth=select&selection="+url.QueryEscape(selectionID))
 		return
 	}
 	token, profile, err := s.completeOAuth(r.Context(), provider, code, string(verifier), state, r.URL.Query().Get("device_id"))
@@ -321,6 +343,17 @@ func (s *Server) completeOAuth(ctx context.Context, provider oauthProvider, code
 }
 
 func (s *Server) completeInstagramFacebookOAuth(ctx context.Context, provider oauthProvider, code string) (oauthToken, platformProfile, error) {
+	candidates, err := s.discoverInstagramFacebookAccounts(ctx, provider, code)
+	if err != nil {
+		return oauthToken{}, platformProfile{}, err
+	}
+	if len(candidates) != 1 {
+		return oauthToken{}, platformProfile{}, fmt.Errorf("Facebook returned %d linked Instagram accounts", len(candidates))
+	}
+	return candidates[0].Token, candidates[0].Profile, nil
+}
+
+func (s *Server) discoverInstagramFacebookAccounts(ctx context.Context, provider oauthProvider, code string) ([]instagramFacebookCandidate, error) {
 	endpoint := strings.TrimRight(s.config.InstagramFacebookGraphAPIBase, "/") + "/oauth/access_token?" + url.Values{
 		"client_id": {provider.ClientID}, "client_secret": {provider.ClientSecret}, "redirect_uri": {provider.RedirectURL}, "code": {code},
 	}.Encode()
@@ -329,7 +362,7 @@ func (s *Server) completeInstagramFacebookOAuth(ctx context.Context, provider oa
 		ExpiresIn   int64  `json:"expires_in"`
 	}
 	if err := doJSON(ctx, http.MethodGet, endpoint, "", &token); err != nil || token.AccessToken == "" {
-		return oauthToken{}, platformProfile{}, fmt.Errorf("Facebook token exchange failed")
+		return nil, fmt.Errorf("Facebook token exchange failed")
 	}
 	var longToken struct {
 		AccessToken string `json:"access_token"`
@@ -339,9 +372,19 @@ func (s *Server) completeInstagramFacebookOAuth(ctx context.Context, provider oa
 		"grant_type": {"fb_exchange_token"}, "client_id": {provider.ClientID}, "client_secret": {provider.ClientSecret}, "fb_exchange_token": {token.AccessToken},
 	}.Encode()
 	if err := doJSON(ctx, http.MethodGet, longURL, "", &longToken); err != nil || longToken.AccessToken == "" {
-		return oauthToken{}, platformProfile{}, fmt.Errorf("Facebook long-lived token exchange failed")
+		return nil, fmt.Errorf("Facebook long-lived token exchange failed")
 	}
 	token = longToken
+	var facebookUser struct {
+		ID string `json:"id"`
+	}
+	facebookUserURL := strings.TrimRight(s.config.InstagramFacebookGraphAPIBase, "/") + "/me?" + url.Values{
+		"fields":       {"id"},
+		"access_token": {token.AccessToken},
+	}.Encode()
+	if err := doJSON(ctx, http.MethodGet, facebookUserURL, "", &facebookUser); err != nil || facebookUser.ID == "" {
+		return nil, fmt.Errorf("Facebook user identity is unavailable")
+	}
 	var permissions struct {
 		Data []struct {
 			Permission string `json:"permission"`
@@ -353,7 +396,7 @@ func (s *Server) completeInstagramFacebookOAuth(ctx context.Context, provider oa
 	}.Encode()
 	granted := make(map[string]bool)
 	if err := doJSON(ctx, http.MethodGet, permissionsURL, "", &permissions); err != nil {
-		return oauthToken{}, platformProfile{}, fmt.Errorf("Facebook granted permissions are unavailable")
+		return nil, fmt.Errorf("Facebook granted permissions are unavailable")
 	}
 	for _, permission := range permissions.Data {
 		if permission.Status == "granted" {
@@ -367,11 +410,11 @@ func (s *Server) completeInstagramFacebookOAuth(ctx context.Context, provider oa
 		}
 	}
 	if len(missing) > 0 {
-		return oauthToken{}, platformProfile{}, fmt.Errorf("Facebook permissions were not granted: %s", strings.Join(missing, ", "))
+		return nil, fmt.Errorf("Facebook permissions were not granted: %s", strings.Join(missing, ", "))
 	}
 	pages, err := s.fetchFacebookPages(ctx, token.AccessToken)
 	if err != nil {
-		return oauthToken{}, platformProfile{}, fmt.Errorf("Facebook Pages are unavailable")
+		return nil, fmt.Errorf("Facebook Pages are unavailable")
 	}
 	linkedPages := make([]facebookPage, 0, len(pages))
 	for _, page := range pages {
@@ -381,33 +424,41 @@ func (s *Server) completeInstagramFacebookOAuth(ctx context.Context, provider oa
 	}
 	if len(linkedPages) == 0 {
 		if len(pages) == 0 {
-			return oauthToken{}, platformProfile{}, fmt.Errorf("Facebook granted the requested permissions but returned 0 Page assets; check the Facebook Login for Business configuration and selected Pages")
+			return nil, fmt.Errorf("Facebook granted the requested permissions but returned 0 Page assets; check the Facebook Login for Business configuration and selected Pages")
 		}
 		pageNames := make([]string, 0, len(pages))
 		for _, page := range pages {
 			pageNames = append(pageNames, page.Name+" ("+page.ID+")")
 		}
-		return oauthToken{}, platformProfile{}, fmt.Errorf("Facebook returned %d Pages but none included a professional Instagram account: %s", len(pages), strings.Join(pageNames, ", "))
+		return nil, fmt.Errorf("Facebook returned %d Pages but none included a professional Instagram account: %s", len(pages), strings.Join(pageNames, ", "))
 	}
-	if len(linkedPages) > 1 {
-		return oauthToken{}, platformProfile{}, fmt.Errorf("more than one Instagram account is available; select a single connected Page and try again")
+	candidates := make([]instagramFacebookCandidate, 0, len(linkedPages))
+	seenAccounts := make(map[string]struct{}, len(linkedPages))
+	for _, page := range linkedPages {
+		if page.AccessToken == "" {
+			continue
+		}
+		account, accountErr := s.fetchFacebookInstagramAccount(ctx, page.InstagramBusinessAccount.ID, page.AccessToken)
+		if accountErr != nil {
+			continue
+		}
+		if _, seen := seenAccounts[account.ID]; seen {
+			continue
+		}
+		seenAccounts[account.ID] = struct{}{}
+		displayName := account.Name
+		if displayName == "" {
+			displayName = account.Username
+		}
+		candidates = append(candidates, instagramFacebookCandidate{
+			Token:   oauthToken{AccessToken: page.AccessToken, RefreshToken: token.AccessToken, Scopes: provider.Scopes, ExpiresIn: token.ExpiresIn},
+			Profile: platformProfile{ExternalID: account.ID, Username: account.Username, DisplayName: displayName, ProfileURL: "https://www.instagram.com/" + account.Username + "/", AvatarURL: account.ProfilePictureURL, AccountType: "PROFESSIONAL", Metadata: map[string]any{"connectionMode": "FACEBOOK", "facebookUserId": facebookUser.ID, "facebookPageId": page.ID, "facebookPageName": page.Name}},
+		})
 	}
-	page := linkedPages[0]
-	if page.AccessToken == "" {
-		return oauthToken{}, platformProfile{}, fmt.Errorf("Facebook Page access token is unavailable")
+	if len(candidates) == 0 {
+		return nil, fmt.Errorf("Facebook Pages did not provide a usable linked Instagram account")
 	}
-	account, err := s.fetchFacebookInstagramAccount(ctx, page.InstagramBusinessAccount.ID, page.AccessToken)
-	if err != nil {
-		return oauthToken{}, platformProfile{}, fmt.Errorf("linked Instagram account is unavailable")
-	}
-	if account.Username == "" {
-		return oauthToken{}, platformProfile{}, fmt.Errorf("linked Instagram account did not include a username")
-	}
-	displayName := account.Name
-	if displayName == "" {
-		displayName = account.Username
-	}
-	return oauthToken{AccessToken: page.AccessToken, RefreshToken: token.AccessToken, Scopes: provider.Scopes, ExpiresIn: token.ExpiresIn}, platformProfile{ExternalID: account.ID, Username: account.Username, DisplayName: displayName, ProfileURL: "https://www.instagram.com/" + account.Username + "/", AvatarURL: account.ProfilePictureURL, AccountType: "PROFESSIONAL", Metadata: map[string]any{"connectionMode": "FACEBOOK", "facebookPageId": page.ID, "facebookPageName": page.Name}}, nil
+	return candidates, nil
 }
 
 func (s *Server) fetchFacebookPages(ctx context.Context, userAccessToken string) ([]facebookPage, error) {
@@ -642,6 +693,18 @@ func (s *Server) saveCompanyVKConnection(ctx context.Context, organizationID, co
 }
 
 func (s *Server) savePlatformConnection(ctx context.Context, organizationID, creatorID string, provider oauthProvider, token oauthToken, profile platformProfile) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = s.savePlatformConnectionTx(ctx, tx, organizationID, creatorID, provider, token, profile); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Server) savePlatformConnectionTx(ctx context.Context, tx pgx.Tx, organizationID, creatorID string, provider oauthProvider, token oauthToken, profile platformProfile) error {
 	if profile.ExternalID == "" || token.AccessToken == "" || s.envelope == nil {
 		return fmt.Errorf("incomplete platform connection")
 	}
@@ -665,11 +728,6 @@ func (s *Server) savePlatformConnection(ctx context.Context, organizationID, cre
 		value := time.Now().Add(time.Duration(token.ExpiresIn) * time.Second)
 		expiresAt = &value
 	}
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(ctx)
 	var accountID string
 	err = tx.QueryRow(ctx, `INSERT INTO platform_accounts(organization_id,platform,external_id,username,display_name,profile_url,avatar_url,account_type,status,metadata,last_synced_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'ACTIVE',$9::jsonb,NULL) ON CONFLICT(organization_id,platform,external_id) DO UPDATE SET username=excluded.username,display_name=excluded.display_name,profile_url=excluded.profile_url,avatar_url=excluded.avatar_url,account_type=excluded.account_type,status='ACTIVE',metadata=excluded.metadata,last_error=NULL,updated_at=now() RETURNING id`, organizationID, provider.ID, profile.ExternalID, profile.Username, profile.DisplayName, profile.ProfileURL, profile.AvatarURL, profile.AccountType, string(metadata)).Scan(&accountID)
 	if err != nil {
@@ -694,7 +752,7 @@ func (s *Server) savePlatformConnection(ctx context.Context, organizationID, cre
 	if err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	return nil
 }
 
 func (s *Server) platformConnections(w http.ResponseWriter, r *http.Request) {
@@ -880,7 +938,7 @@ func (s *Server) disconnectPlatform(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	if token := s.platformRevocationToken(connection); token != "" {
+	if token := s.platformRevocationToken(connection); connection.revokeAllowed && token != "" {
 		// Provider revocation is best-effort. The local transaction below is the
 		// source of truth and must still remove tokens if a provider is down or the
 		// token was already revoked.
@@ -940,6 +998,7 @@ type platformRevocationConnection struct {
 	accessCipher, accessNonce   []byte
 	refreshCipher, refreshNonce []byte
 	facebookLogin               bool
+	revokeAllowed               bool
 }
 
 func (s *Server) platformConnectionForRevocation(ctx context.Context, accountID, organizationID string) (platformRevocationConnection, bool, error) {
@@ -948,11 +1007,22 @@ func (s *Server) platformConnectionForRevocation(ctx context.Context, accountID,
 		SELECT a.platform,
 			COALESCE(c.access_token_ciphertext,''::bytea),COALESCE(c.access_token_nonce,''::bytea),
 			COALESCE(c.refresh_token_ciphertext,''::bytea),COALESCE(c.refresh_token_nonce,''::bytea),
-			COALESCE(a.metadata->>'connectionMode','')='FACEBOOK'
+			COALESCE(a.metadata->>'connectionMode','')='FACEBOOK',
+			CASE
+				WHEN COALESCE(a.metadata->>'connectionMode','')<>'FACEBOOK' OR COALESCE(a.metadata->>'facebookUserId','')='' THEN true
+				ELSE NOT EXISTS(
+					SELECT 1
+					FROM platform_accounts other
+					JOIN oauth_connections other_connection ON other_connection.platform_account_id=other.id AND other_connection.organization_id=other.organization_id
+					WHERE other.id<>a.id AND other.platform='INSTAGRAM'
+						AND other.status<>'DISCONNECTED' AND COALESCE(other.metadata->>'connectionMode','')='FACEBOOK'
+						AND other.metadata->>'facebookUserId'=a.metadata->>'facebookUserId'
+				)
+			END
 		FROM platform_accounts a
 		LEFT JOIN oauth_connections c ON c.platform_account_id=a.id AND c.organization_id=a.organization_id
 		WHERE a.id=$1 AND a.organization_id=$2
-	`, accountID, organizationID).Scan(&connection.platform, &connection.accessCipher, &connection.accessNonce, &connection.refreshCipher, &connection.refreshNonce, &connection.facebookLogin)
+	`, accountID, organizationID).Scan(&connection.platform, &connection.accessCipher, &connection.accessNonce, &connection.refreshCipher, &connection.refreshNonce, &connection.facebookLogin, &connection.revokeAllowed)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return platformRevocationConnection{}, false, nil
 	}
@@ -1016,7 +1086,7 @@ func (s *Server) purgePlatformData(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	if token := s.platformRevocationToken(connection); token != "" {
+	if token := s.platformRevocationToken(connection); connection.revokeAllowed && token != "" {
 		_ = s.revokePlatform(r.Context(), connection.platform, token, connection.facebookLogin)
 	}
 

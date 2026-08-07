@@ -107,6 +107,8 @@ func (s *Server) Router() http.Handler {
 			r.Get("/creators/{id}/accounts", s.listCreatorAccounts)
 			r.With(s.require("ADMIN", "ANALYST")).Post("/creators/{id}/accounts", s.createCreatorAccount)
 			r.With(s.require("ADMIN", "ANALYST")).Post("/creators/{id}/connections/{platform}/authorize", s.oauthAuthorize)
+			r.With(s.require("ADMIN", "ANALYST")).Get("/creators/{id}/connections/instagram-facebook/selections/{selectionID}", s.getInstagramAccountSelection)
+			r.With(s.require("ADMIN", "ANALYST")).Post("/creators/{id}/connections/instagram-facebook/selections/{selectionID}", s.completeInstagramAccountSelection)
 			r.Get("/creators/{id}/connections", s.platformConnections)
 			r.Get("/integrations", s.integrationStatus)
 			r.With(s.require("ADMIN", "ANALYST")).Delete("/platform-accounts/{id}/connection", s.disconnectPlatform)

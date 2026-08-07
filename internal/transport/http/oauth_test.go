@@ -133,6 +133,12 @@ func TestCompleteInstagramFacebookOAuthUsesLinkedPageAccessToken(t *testing.T) {
 			map[string]any{"permission": "pages_read_engagement", "status": "granted"},
 		}})
 	})
+	mux.HandleFunc("/me", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("access_token") != "long-user-token" || r.URL.Query().Get("fields") != "id" {
+			t.Fatal("long-lived Facebook user token was not used to load the user identity")
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"id": "facebook-user-1"})
+	})
 	mux.HandleFunc("/me/accounts", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("access_token") != "long-user-token" {
 			t.Fatal("Facebook user token was not used to discover Pages")
@@ -179,8 +185,77 @@ func TestCompleteInstagramFacebookOAuthUsesLinkedPageAccessToken(t *testing.T) {
 	if token.AccessToken != "page-access-token" || token.RefreshToken != "long-user-token" {
 		t.Fatalf("unexpected token result: %#v", token)
 	}
-	if profile.ExternalID != "ig-1" || profile.Username != "creator" || profile.Metadata["facebookPageId"] != "page-1" {
+	if profile.ExternalID != "ig-1" || profile.Username != "creator" || profile.Metadata["facebookPageId"] != "page-1" || profile.Metadata["facebookUserId"] != "facebook-user-1" {
 		t.Fatalf("unexpected profile result: %#v", profile)
+	}
+}
+
+func TestDiscoverInstagramFacebookAccountsReturnsEveryLinkedPage(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/oauth/access_token", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("grant_type") == "fb_exchange_token" {
+			writeJSON(w, http.StatusOK, map[string]any{"access_token": "long-user-token", "expires_in": 5_184_000})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"access_token": "short-user-token", "expires_in": 3600})
+	})
+	mux.HandleFunc("/me", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{"id": "facebook-user-1"})
+	})
+	mux.HandleFunc("/me/permissions", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{"data": []any{
+			map[string]any{"permission": "instagram_basic", "status": "granted"},
+			map[string]any{"permission": "pages_show_list", "status": "granted"},
+		}})
+	})
+	mux.HandleFunc("/me/accounts", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{"data": []any{
+			map[string]any{"id": "page-1", "name": "First Page", "access_token": "page-token-1", "instagram_business_account": map[string]any{"id": "ig-1"}},
+			map[string]any{"id": "page-2", "name": "Second Page", "access_token": "page-token-2", "instagram_business_account": map[string]any{"id": "ig-2"}},
+		}})
+	})
+	for _, accountID := range []string{"ig-1", "ig-2"} {
+		accountID := accountID
+		mux.HandleFunc("/"+accountID, func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, http.StatusOK, map[string]any{"id": accountID, "username": accountID + "-username", "name": accountID + " name"})
+		})
+	}
+	server := httptest.NewServer(mux)
+	defer server.Close()
+	s := &Server{config: config.Config{InstagramFacebookGraphAPIBase: server.URL}}
+	provider := oauthProvider{ID: "INSTAGRAM", ClientID: "client", ClientSecret: "secret", RedirectURL: "https://app.test/callback", Flow: "FACEBOOK", Scopes: []string{"instagram_basic", "pages_show_list"}}
+
+	candidates, err := s.discoverInstagramFacebookAccounts(t.Context(), provider, "code")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(candidates) != 2 || candidates[0].Profile.ExternalID != "ig-1" || candidates[1].Profile.ExternalID != "ig-2" {
+		t.Fatalf("unexpected candidates: %#v", candidates)
+	}
+	if candidates[0].Token.AccessToken != "page-token-1" || candidates[1].Token.AccessToken != "page-token-2" || candidates[0].Token.RefreshToken != "long-user-token" {
+		t.Fatalf("unexpected candidate tokens: %#v", candidates)
+	}
+}
+
+func TestSelectionAccountsMarksExistingAssignments(t *testing.T) {
+	candidates := []instagramFacebookCandidate{
+		{Profile: platformProfile{ExternalID: "available", Username: "available", Metadata: map[string]any{"facebookPageName": "Available Page"}}},
+		{Profile: platformProfile{ExternalID: "current", Username: "current", Metadata: map[string]any{}}},
+		{Profile: platformProfile{ExternalID: "other", Username: "other", Metadata: map[string]any{}}},
+	}
+	assignments := map[string]instagramAssignment{
+		"current": {CreatorID: "creator-1", CreatorName: "Current creator"},
+		"other":   {CreatorID: "creator-2", CreatorName: "Other creator"},
+	}
+	items := selectionAccounts(candidates, assignments, "creator-1")
+	if items[0].ConnectionState != "AVAILABLE" || !items[0].Selectable || items[0].FacebookPageName != "Available Page" {
+		t.Fatalf("unexpected available item: %#v", items[0])
+	}
+	if items[1].ConnectionState != "CONNECTED_HERE" || !items[1].Selectable {
+		t.Fatalf("unexpected current item: %#v", items[1])
+	}
+	if items[2].ConnectionState != "CONNECTED_ELSEWHERE" || items[2].Selectable || items[2].ConnectedCreator != "Other creator" {
+		t.Fatalf("unexpected assigned item: %#v", items[2])
 	}
 }
 

@@ -556,6 +556,137 @@ button:disabled {
   margin-top: 1rem;
   line-height: 1.55;
 }
+.accountSelectorBackdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 110;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  background: rgb(8 9 9 / 78%);
+  backdrop-filter: blur(8px);
+}
+.accountSelector {
+  width: min(36rem, 100%);
+  max-height: min(46rem, calc(100vh - 2rem));
+  overflow: hidden;
+  color: var(--text);
+  background: linear-gradient(150deg, #333737 0%, #242626 55%, #1d1f1f 100%);
+  border: 1px solid rgb(156 229 189 / 24%);
+  border-radius: 1.15rem;
+  box-shadow: 0 28px 80px rgb(0 0 0 / 58%), inset 0 1px rgb(255 255 255 / 6%);
+}
+.accountSelector > header {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1.35rem 1.4rem 1.15rem;
+  border-bottom: 1px solid var(--border);
+}
+.accountSelector > header > div { display: grid; gap: .28rem; }
+.accountSelector > header span { color: #bcefd0; font-size: .65rem; font-weight: 800; letter-spacing: .14em; }
+.accountSelector > header h2 { margin: 0; font-size: 1.5rem; letter-spacing: -.025em; }
+.accountSelector > header p { max-width: 30rem; margin: .15rem 0 0; color: var(--muted); font-size: .82rem; line-height: 1.5; }
+.accountSelector > header > button {
+  flex: none;
+  padding: 0;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  font: inherit;
+  font-size: 1.6rem;
+  line-height: 1;
+}
+.accountSelectorBody { max-height: calc(46rem - 9rem); overflow: auto; padding: 1.15rem 1.4rem 1.4rem; }
+.accountSelectorSummary { display: flex; align-items: end; justify-content: space-between; gap: 1rem; margin-bottom: .75rem; }
+.accountSelectorSummary > div { display: grid; gap: .2rem; }
+.accountSelectorSummary b { font-size: .9rem; }
+.accountSelectorSummary span { color: var(--muted); font-size: .74rem; }
+.accountSelectorSummary button,
+.accountSelectorHelp {
+  padding: .25rem 0;
+  color: #bcefd0;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  font: inherit;
+  font-size: .78rem;
+  font-weight: 750;
+}
+.accountCandidateList { display: grid; gap: .65rem; }
+.accountCandidate {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: .8rem;
+  padding: .8rem;
+  background: rgb(0 0 0 / 15%);
+  border: 1px solid rgb(244 235 218 / 10%);
+  border-radius: .8rem;
+  cursor: pointer;
+  transition: border-color 140ms ease, background 140ms ease;
+}
+.accountCandidate:hover { background: rgb(156 229 189 / 5%); border-color: rgb(156 229 189 / 22%); }
+.accountCandidateDisabled { opacity: .58; cursor: not-allowed; }
+.accountCandidateDisabled:hover { background: rgb(0 0 0 / 15%); border-color: rgb(244 235 218 / 10%); }
+.accountCandidateAvatar {
+  display: grid;
+  width: 3rem;
+  height: 3rem;
+  place-items: center;
+  overflow: hidden;
+  color: #1d2b23;
+  background: #bcefd0;
+  border-radius: 50%;
+  font-size: 1rem;
+  font-weight: 850;
+}
+.accountCandidateAvatar img { width: 100%; height: 100%; object-fit: cover; }
+.accountCandidateIdentity { display: grid; min-width: 0; gap: .13rem; }
+.accountCandidateIdentity b { overflow: hidden; text-overflow: ellipsis; font-size: .91rem; white-space: nowrap; }
+.accountCandidateIdentity > span { color: var(--muted); font-size: .78rem; }
+.accountCandidateIdentity small { overflow: hidden; color: #9fc5ad; font-size: .7rem; text-overflow: ellipsis; white-space: nowrap; }
+.accountCandidate > input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.accountCandidateSwitch {
+  position: relative;
+  width: 2.65rem;
+  height: 1.55rem;
+  background: #4a4d4d;
+  border: 1px solid rgb(255 255 255 / 8%);
+  border-radius: 2rem;
+  transition: background 140ms ease;
+}
+.accountCandidateSwitch > span {
+  position: absolute;
+  top: .17rem;
+  left: .18rem;
+  width: 1.08rem;
+  height: 1.08rem;
+  background: #f2eee7;
+  border-radius: 50%;
+  box-shadow: 0 2px 6px rgb(0 0 0 / 35%);
+  transition: transform 140ms ease;
+}
+.accountCandidate > input:checked + .accountCandidateSwitch { background: #6ec99a; }
+.accountCandidate > input:checked + .accountCandidateSwitch > span { transform: translateX(1.08rem); }
+.accountCandidate > input:focus-visible + .accountCandidateSwitch { outline: 2px solid #e4b667; outline-offset: 2px; }
+.accountSelectorEmpty { padding: 2.5rem 1rem; color: var(--muted); text-align: center; }
+.accountSelectorSubmit {
+  width: 100%;
+  margin-top: 1rem;
+  padding: .75rem 1rem;
+  color: #18221d;
+  background: linear-gradient(135deg, #bcefd0, #72c89e);
+  border: 0;
+  border-radius: .65rem;
+  box-shadow: inset 0 1px rgb(255 255 255 / 35%), 0 8px 22px rgb(0 0 0 / 20%);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 800;
+}
+.accountSelectorHelp { display: block; margin: .55rem auto 0; }
 .dialogMark {
   display: grid;
   flex: none;

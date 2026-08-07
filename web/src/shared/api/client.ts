@@ -17,6 +17,7 @@ export type CreatorHistoryEvent = { id:string; changedAt:string; changedBy:strin
 export type PlatformAccount = {id:string;platform:string;username:string;displayName:string;status:string;profileUrl:string}
 export type Platform = 'YOUTUBE' | 'INSTAGRAM' | 'TIKTOK' | 'VK'
 export type PlatformConnection = {id:string;platform:Platform;username:string;displayName:string;status:string;oauthStatus:string;avatarUrl:string;profileUrl:string;scopes:string[];lastSyncedAt:string | null;bioDescription?:string;isVerified?:boolean}
+export type InstagramAccountCandidate = {id:string;username:string;displayName:string;avatarUrl:string;facebookPageName:string;connectionState:'AVAILABLE'|'CONNECTED_HERE'|'CONNECTED_ELSEWHERE';connectedCreator?:string;selectable:boolean}
 export type IntegrationStatus = {id:Platform;name:string;configured:boolean;connectedAccounts:number}
 export type SyncAccount = {
   id:string
@@ -81,6 +82,8 @@ export const api = {
   connections:(id:string)=>request<{items:PlatformConnection[]}>(`/creators/${id}/connections`),
   integrations:()=>request<{items:IntegrationStatus[];accounts:SyncAccount[]}>('/integrations'),
   startAuthorization:(id:string,platform:string)=>request<{authorizationUrl:string;expiresAt:string}>(`/creators/${id}/connections/${platform.toLowerCase()}/authorize`,{method:'POST'}),
+  instagramAccountSelection:(id:string,selectionID:string)=>request<{items:InstagramAccountCandidate[];expiresAt:string}>(`/creators/${id}/connections/instagram-facebook/selections/${selectionID}`),
+  completeInstagramAccountSelection:(id:string,selectionID:string,accountIds:string[])=>request<{connected:number}>(`/creators/${id}/connections/instagram-facebook/selections/${selectionID}`,{method:'POST',body:JSON.stringify({accountIds})}),
   disconnectPlatformAccount:(id:string)=>request<void>(`/platform-accounts/${id}/connection`,{method:'DELETE'}),
   purgePlatformData:(id:string)=>request<void>(`/platform-accounts/${id}/data`,{method:'DELETE'}),
 }

@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { api, type CreatorDetail, type CreatorHistoryBlock, type CreatorHistoryChange, type CreatorStatus, type CreatorWorkStatus, type Platform, type PlatformConnection } from '../../shared/api/client'
+import { api, type CreatorDetail, type CreatorHistoryBlock, type CreatorHistoryChange, type CreatorStatus, type CreatorWorkStatus, type InstagramAccountCandidate, type Platform, type PlatformConnection } from '../../shared/api/client'
 import { useI18n } from '../../shared/i18n/I18nProvider'
 import styles from './CreatorDetailPage.module.scss'
 import statusStyles from './CreatorStatus.module.scss'
@@ -401,14 +401,57 @@ function CredentialVault({ creatorID }: { creatorID: string }) {
   </section>
 }
 
+function InstagramAccountSelector({ items, selected, loading, saving, error, onToggle, onSelectAll, onCancel, onSubmit, onRestart }: {
+  items: InstagramAccountCandidate[]
+  selected: Set<string>
+  loading: boolean
+  saving: boolean
+  error: string
+  onToggle: (id: string) => void
+  onSelectAll: () => void
+  onCancel: () => void
+  onSubmit: () => void
+  onRestart: () => void
+}) {
+  const { t } = useI18n()
+  const selectableCount = items.filter(item => item.selectable).length
+  const allSelected = selectableCount > 0 && selected.size === selectableCount
+  return <div className={styles.accountSelectorBackdrop} role="presentation">
+    <div className={styles.accountSelector} role="dialog" aria-modal="true" aria-labelledby="instagram-account-selector-title">
+      <header><div><span>INSTAGRAM · FACEBOOK</span><h2 id="instagram-account-selector-title">{t('Добавьте аккаунты')}</h2><p>{t('Мы нашли профессиональные Instagram-аккаунты, связанные с доступными вам Facebook Pages.')}</p></div><button type="button" aria-label={t('Закрыть')} onClick={onCancel} disabled={saving}>×</button></header>
+      <div className={styles.accountSelectorBody}>
+        <div className={styles.accountSelectorSummary}><div><b>{t('Выберите аккаунты')}</b><span>{t('Выбрано:')} {selected.size} {t('из')} {selectableCount}</span></div>{selectableCount ? <button type="button" onClick={onSelectAll} disabled={saving}>{allSelected ? t('Снять выбор') : t('Выбрать всех')}</button> : null}</div>
+        {loading ? <p className={styles.accountSelectorEmpty}>{t('Проверяем найденные аккаунты…')}</p> : items.length ? <div className={styles.accountCandidateList}>{items.map(item => {
+          const checked = selected.has(item.id)
+          const status = item.connectionState === 'CONNECTED_HERE'
+            ? t('Уже подключён — доступ будет обновлён')
+            : item.connectionState === 'CONNECTED_ELSEWHERE'
+              ? `${t('Подключён к другому креатору:')} ${item.connectedCreator}`
+              : item.facebookPageName ? `Facebook Page · ${item.facebookPageName}` : t('Доступен для подключения')
+          return <label className={`${styles.accountCandidate} ${item.selectable ? '' : styles.accountCandidateDisabled}`} key={item.id}>
+            <span className={styles.accountCandidateAvatar}>{item.avatarUrl ? <img src={item.avatarUrl} alt="" /> : item.username.slice(0, 1).toUpperCase()}</span>
+            <span className={styles.accountCandidateIdentity}><b>{item.displayName || item.username}</b><span>@{item.username}</span><small>{status}</small></span>
+            <input type="checkbox" checked={checked} disabled={!item.selectable || saving} onChange={() => onToggle(item.id)} aria-label={`${t('Выбрать аккаунт')} @${item.username}`} />
+            <span className={styles.accountCandidateSwitch} aria-hidden="true"><span /></span>
+          </label>
+        })}</div> : <p className={styles.accountSelectorEmpty}>{t('Доступных аккаунтов не найдено.')}</p>}
+        {error ? <p className={styles.error}>{t(error)}</p> : null}
+        <button type="button" className={styles.accountSelectorSubmit} onClick={onSubmit} disabled={saving || loading || selected.size === 0}>{saving ? t('Подключаем…') : t('Добавить аккаунты')}</button>
+        <button type="button" className={styles.accountSelectorHelp} onClick={onRestart} disabled={saving}>{t('Не видите свой аккаунт?')}</button>
+      </div>
+    </div>
+  </div>
+}
+
 function PlatformConnections({ creatorID }: { creatorID: string }) {
   const { locale, t } = useI18n()
   const queryClient = useQueryClient()
-  const [params] = useSearchParams()
+  const [params, setParams] = useSearchParams()
   const [showConnectedToast, setShowConnectedToast] = useState(false)
   const [disconnectedPlatform, setDisconnectedPlatform] = useState<Platform | null>(null)
   const [pendingDisconnect, setPendingDisconnect] = useState<PlatformConnection | null>(null)
   const [disconnectError, setDisconnectError] = useState('')
+  const [selectedInstagramAccounts, setSelectedInstagramAccounts] = useState<Set<string>>(new Set())
   const me = useQuery({ queryKey: ['me'], queryFn: api.me })
   const connections = useQuery({ queryKey: ['platform-connections', creatorID, locale], queryFn: () => api.connections(creatorID) })
   const integrations = useQuery({ queryKey: ['integrations', locale], queryFn: api.integrations })
@@ -439,19 +482,49 @@ function PlatformConnections({ creatorID }: { creatorID: string }) {
   })
   const callbackPlatform = params.get('platform')?.toUpperCase()
   const result = params.get('oauth')
+  const selectionID = result === 'select' ? params.get('selection') ?? '' : ''
+  const instagramSelection = useQuery({
+    queryKey: ['instagram-account-selection', creatorID, selectionID, locale],
+    queryFn: () => api.instagramAccountSelection(creatorID, selectionID),
+    enabled: Boolean(selectionID),
+    retry: false,
+    staleTime: 10 * 60 * 1000,
+    refetchOnWindowFocus: false,
+  })
   const configured = new Map(integrations.data?.items.map(item => [item.id, item.configured]))
   const canDisconnect = me.data?.role === 'ADMIN' || me.data?.role === 'ANALYST'
+  const clearOAuthParams = useCallback(() => {
+    setParams(current => {
+      const next = new URLSearchParams(current)
+      next.delete('platform')
+      next.delete('oauth')
+      next.delete('selection')
+      return next
+    }, { replace: true })
+  }, [setParams])
+
+  useEffect(() => {
+    if (!selectionID || !instagramSelection.data) return
+    setSelectedInstagramAccounts(new Set(instagramSelection.data.items.filter(item => item.selectable).map(item => item.id)))
+  }, [selectionID, instagramSelection.data])
+
+  const completeInstagramSelection = useMutation({
+    mutationFn: () => api.completeInstagramAccountSelection(creatorID, selectionID, Array.from(selectedInstagramAccounts)),
+    onSuccess: async () => {
+      clearOAuthParams()
+      setSelectedInstagramAccounts(new Set())
+      await refresh()
+      setShowConnectedToast(true)
+    },
+  })
 
   useEffect(() => {
     if (result !== 'connected') return
     setShowConnectedToast(true)
     const timer = window.setTimeout(() => setShowConnectedToast(false), 6000)
-    const url = new URL(window.location.href)
-    url.searchParams.delete('platform')
-    url.searchParams.delete('oauth')
-    window.history.replaceState({}, '', url)
+    clearOAuthParams()
     return () => window.clearTimeout(timer)
-  }, [result])
+  }, [clearOAuthParams, result])
 
   useEffect(() => {
     if (!disconnectedPlatform) return
@@ -461,7 +534,7 @@ function PlatformConnections({ creatorID }: { creatorID: string }) {
 
   return <section className={styles.connections}>
     <div className={styles.connectionHead}><div><h2>{t('Подключения платформ')}</h2><p>{t('Официальные OAuth-подключения для автоматического сбора статистики.')}</p></div></div>
-    {result && result !== 'connected' ? <p className={styles.error}>{t('Подключение')} {callbackPlatform ?? t('аккаунта')} {t('не завершено:')} {result}.</p> : null}
+    {result && result !== 'connected' && result !== 'select' ? <p className={styles.error}>{t('Подключение')} {callbackPlatform ?? t('аккаунта')} {t('не завершено:')} {result}.</p> : null}
     {authorize.isError ? <p className={styles.error}>{t(authorize.error.message)}</p> : null}
     {disconnectError && !pendingDisconnect ? <p className={styles.error}>{t(disconnectError)}</p> : null}
     <div className={styles.platformGrid}>{platformOptions.map(platform => {
@@ -484,6 +557,18 @@ function PlatformConnections({ creatorID }: { creatorID: string }) {
         <div className={styles.dialogActions}><button type="button" onClick={() => { setPendingDisconnect(null); setDisconnectError('') }} disabled={disconnect.isPending}>{t('Отмена')}</button><button type="button" className={styles.confirmDanger} onClick={() => disconnect.mutate(pendingDisconnect)} disabled={disconnect.isPending}>{disconnect.isPending ? t('Отвязываем…') : t('Отвязать')}</button></div>
       </div>
     </div> : null}
+    {selectionID ? <InstagramAccountSelector
+      items={instagramSelection.data?.items ?? []}
+      selected={selectedInstagramAccounts}
+      loading={instagramSelection.isPending}
+      saving={completeInstagramSelection.isPending}
+      error={instagramSelection.isError ? instagramSelection.error.message : completeInstagramSelection.isError ? completeInstagramSelection.error.message : ''}
+      onToggle={(accountID) => setSelectedInstagramAccounts(current => { const next = new Set(current); if (next.has(accountID)) next.delete(accountID); else next.add(accountID); return next })}
+      onSelectAll={() => setSelectedInstagramAccounts(current => current.size === (instagramSelection.data?.items.filter(item => item.selectable).length ?? 0) ? new Set() : new Set(instagramSelection.data?.items.filter(item => item.selectable).map(item => item.id) ?? []))}
+      onCancel={() => { clearOAuthParams(); setSelectedInstagramAccounts(new Set()) }}
+      onSubmit={() => completeInstagramSelection.mutate()}
+      onRestart={() => authorize.mutate('instagram-facebook')}
+    /> : null}
     {showConnectedToast ? <div className={styles.connectionToast} role="status"><span className={styles.toastMark}>✓</span><div><b>{callbackPlatform ?? t('Аккаунт')} {t('подключён')}</b><span>{t('Доступ к данным добавлен')}</span></div><button type="button" aria-label={t('Закрыть уведомление')} onClick={() => setShowConnectedToast(false)}>×</button></div> : null}
     {disconnectedPlatform ? <div className={styles.connectionToast} role="status"><span className={styles.toastMark}>✓</span><div><b>{disconnectedPlatform} {t('отвязан')}</b><span>{t('Подключение отозвано; собранные данные сохранены')}</span></div><button type="button" aria-label={t('Закрыть уведомление')} onClick={() => setDisconnectedPlatform(null)}>×</button></div> : null}
   </section>
