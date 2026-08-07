@@ -236,7 +236,18 @@ func (s *Server) accessTokenForSync(ctx context.Context, job platformSyncJob) (s
 		refreshed, err = s.refreshYouTubeAccessToken(ctx, string(refreshPlain))
 	case "INSTAGRAM":
 		if metadata["connectionMode"] == "FACEBOOK" {
-			refreshed, err = s.refreshInstagramFacebookAccessToken(ctx, string(accessPlain))
+			if len(refreshCipher) == 0 || len(refreshNonce) == 0 {
+				return "", &providerError{Platform: "Instagram", Kind: providerAuth, Message: "Facebook user authorization is missing; reconnect the account"}
+			}
+			userAccessToken, decryptErr := s.envelope.Decrypt(refreshCipher, refreshNonce)
+			if decryptErr != nil {
+				return "", decryptErr
+			}
+			pageID, _ := metadata["facebookPageId"].(string)
+			if pageID == "" {
+				return "", &providerError{Platform: "Instagram", Kind: providerAuth, Message: "Facebook Page identity is missing; reconnect the account"}
+			}
+			refreshed, err = s.refreshInstagramFacebookAccessToken(ctx, string(userAccessToken), pageID, job.ExternalID)
 		} else {
 			refreshed, err = s.refreshInstagramAccessToken(ctx, string(accessPlain))
 		}
@@ -349,18 +360,29 @@ func (s *Server) refreshInstagramAccessToken(ctx context.Context, accessToken st
 	return oauthToken{AccessToken: out.AccessToken, ExpiresIn: out.ExpiresIn}, nil
 }
 
-func (s *Server) refreshInstagramFacebookAccessToken(ctx context.Context, accessToken string) (oauthToken, error) {
+func (s *Server) refreshInstagramFacebookAccessToken(ctx context.Context, userAccessToken, pageID, instagramAccountID string) (oauthToken, error) {
 	endpoint := strings.TrimRight(s.config.InstagramFacebookGraphAPIBase, "/") + "/oauth/access_token?" + url.Values{
-		"grant_type": {"fb_exchange_token"}, "client_id": {s.config.InstagramClientID}, "client_secret": {s.config.InstagramClientSecret}, "fb_exchange_token": {accessToken},
+		"grant_type": {"fb_exchange_token"}, "client_id": {s.config.InstagramFacebookClientID}, "client_secret": {s.config.InstagramFacebookClientSecret}, "fb_exchange_token": {userAccessToken},
 	}.Encode()
-	var out struct {
+	var userToken struct {
 		AccessToken string `json:"access_token"`
 		ExpiresIn   int64  `json:"expires_in"`
 	}
-	if err := doJSON(ctx, http.MethodGet, endpoint, "", &out); err != nil || out.AccessToken == "" {
+	if err := doJSON(ctx, http.MethodGet, endpoint, "", &userToken); err != nil || userToken.AccessToken == "" {
 		return oauthToken{}, fmt.Errorf("Facebook token refresh failed")
 	}
-	return oauthToken{AccessToken: out.AccessToken, ExpiresIn: out.ExpiresIn}, nil
+	pageURL := strings.TrimRight(s.config.InstagramFacebookGraphAPIBase, "/") + "/" + url.PathEscape(pageID) + "?" + url.Values{
+		"fields":       {"access_token,instagram_business_account"},
+		"access_token": {userToken.AccessToken},
+	}.Encode()
+	var page facebookPage
+	if err := doJSON(ctx, http.MethodGet, pageURL, "", &page); err != nil || page.AccessToken == "" {
+		return oauthToken{}, fmt.Errorf("Facebook Page token refresh failed")
+	}
+	if page.InstagramBusinessAccount.ID == "" || page.InstagramBusinessAccount.ID != instagramAccountID {
+		return oauthToken{}, fmt.Errorf("Facebook Page is no longer linked to the connected Instagram account")
+	}
+	return oauthToken{AccessToken: page.AccessToken, RefreshToken: userToken.AccessToken, ExpiresIn: userToken.ExpiresIn}, nil
 }
 
 func (s *Server) requestAccountSync(w http.ResponseWriter, r *http.Request) {
