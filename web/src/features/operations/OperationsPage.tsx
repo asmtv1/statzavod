@@ -1,22 +1,62 @@
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { api, type Platform, type SyncAccount } from '../../shared/api/client'
+import { api, type Platform, type Publication, type SyncAccount } from '../../shared/api/client'
 import { useI18n } from '../../shared/i18n/I18nProvider'
 import styles from './OperationsPage.module.scss'
 
 export function PublicationsPage() {
   const { locale, t } = useI18n()
   const [companyFilter,setCompanyFilter] = useState('ALL')
+  const [creatorFilter,setCreatorFilter] = useState('ALL')
+  const [platformFilter,setPlatformFilter] = useState<'ALL'|Platform>('ALL')
+  const [selected,setSelected] = useState<string[]>([])
   const result=useQuery({queryKey:['publications', locale],queryFn:api.publications})
   const companies=useQuery({queryKey:['companies', locale],queryFn:api.companies})
-  const items=result.data?.items.filter(item => companyFilter === 'ALL' || (companyFilter === 'NONE' ? !item.companyId : item.companyId === companyFilter)) ?? []
+  const allItems = result.data?.items ?? []
   const formatter = new Intl.NumberFormat(locale === 'en' ? 'en-US' : 'ru-RU')
   const dateLocale = locale === 'en' ? 'en-US' : 'ru-RU'
+  const creators = useMemo(() => [...new Set(allItems.map(item => item.creatorName))].sort((a,b) => a.localeCompare(b, dateLocale)), [allItems, locale])
+  const items = allItems.filter(item =>
+    (companyFilter === 'ALL' || (companyFilter === 'NONE' ? !item.companyId : item.companyId === companyFilter)) &&
+    (creatorFilter === 'ALL' || item.creatorName === creatorFilter) &&
+    (platformFilter === 'ALL' || item.platform === platformFilter),
+  )
+  const allSelected = items.length > 0 && items.every(item => selected.includes(item.id))
+  const toggleAll = () => setSelected(current => allSelected ? current.filter(id => !items.some(item => item.id === id)) : [...new Set([...current, ...items.map(item => item.id)])])
+  const toggleItem = (id:string) => setSelected(current => current.includes(id) ? current.filter(value => value !== id) : [...current,id])
   return <Page title={t('Публикации')} eyebrow={t('КОНТЕНТ')} description={t('Все обнаруженные видео и их последние показатели.')}>
-    <div className={styles.companyToolbar}><label>{t('Компания')}<select value={companyFilter} onChange={event => setCompanyFilter(event.target.value)}><option value="ALL">{t('Все компании')}</option>{companies.data?.items.map(company => <option value={company.id} key={company.id}>{company.name}</option>)}<option value="NONE">{t('Без компании')}</option></select></label><span>{t('Публикаций:')} {items.length}</span></div>
-    <DataState pending={result.isPending} error={result.isError ? result.error.message : ''} empty={!items.length} emptyText={result.data?.items.length ? t('У выбранной компании публикаций пока нет.') : t('Публикации появятся после подключения аккаунта и первого сбора данных.')}>{items.map(item => <article className={styles.row} key={item.id}><div><b>{item.title || t('Без названия')}</b><small>{item.creatorName} · {item.companyName || t('Без компании')} · {item.platform}</small></div><strong>{formatter.format(item.views)} <small>{t('просмотров')}</small></strong><time>{new Date(item.publishedAt).toLocaleDateString(dateLocale)}</time></article>)}</DataState>
+    <div className={styles.publicationsPanel}>
+      <div className={styles.publicationsToolbar}>
+        <div className={styles.publicationFilters}>
+          <label>{t('Компания')}<select value={companyFilter} onChange={event => setCompanyFilter(event.target.value)}><option value="ALL">{t('Все компании')}</option>{companies.data?.items.map(company => <option value={company.id} key={company.id}>{company.name}</option>)}<option value="NONE">{t('Без компании')}</option></select></label>
+          <label>{t('Креатор')}<select value={creatorFilter} onChange={event => setCreatorFilter(event.target.value)}><option value="ALL">{t('Все креаторы')}</option>{creators.map(creator => <option value={creator} key={creator}>{creator}</option>)}</select></label>
+          <label>{t('Платформа')}<select value={platformFilter} onChange={event => setPlatformFilter(event.target.value as 'ALL'|Platform)}><option value="ALL">{t('Все площадки')}</option>{Object.entries(platformNames).map(([platform,name]) => <option value={platform} key={platform}>{name}</option>)}</select></label>
+        </div>
+        <span>{t('Публикаций:')} <b>{items.length}</b></span>
+      </div>
+      <DataState pending={result.isPending} error={result.isError ? result.error.message : ''} empty={!items.length} emptyText={allItems.length ? t('У выбранной компании публикаций пока нет.') : t('Публикации появятся после подключения аккаунта и первого сбора данных.')}>
+        <div className={styles.publicationsTable}>
+          <div className={styles.publicationsHead}>
+            <label className={styles.check}><input type="checkbox" aria-label={t('Выбрать все публикации')} checked={allSelected} onChange={toggleAll}/></label><span>{t('Превью')}</span><span>{t('Текст')}</span><span>{t('Креатор')}</span><span>{t('Площадка')}</span><span>{t('Лайки')}</span><span>{t('Просмотры')}</span><span>{t('Комментарии')}</span><span>{t('Дата')}</span>
+          </div>
+          {items.map(item => <PublicationRow key={item.id} item={item} selected={selected.includes(item.id)} onToggle={toggleItem} formatter={formatter} locale={dateLocale} t={t}/>)}</div>
+      </DataState>
+    </div>
   </Page>
+}
+
+function PublicationRow({ item, selected, onToggle, formatter, locale, t }:{item:Publication;selected:boolean;onToggle:(id:string)=>void;formatter:Intl.NumberFormat;locale:string;t:(value:string)=>string}) {
+  const date = new Intl.DateTimeFormat(locale, { day:'numeric', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit' }).format(new Date(item.publishedAt)).replace(',', '')
+  const platform = platformNames[item.platform]
+  return <article className={`${styles.publicationRow} ${selected ? styles.selectedPublication : ''}`}>
+    <label className={styles.check}><input type="checkbox" aria-label={`${t('Выбрать публикацию')} ${item.title || ''}`} checked={selected} onChange={() => onToggle(item.id)}/></label>
+    <a className={styles.publicationPreview} href={item.permalink || undefined} target={item.permalink ? '_blank' : undefined} rel="noreferrer" aria-label={item.title || t('Без названия')}>
+      {item.thumbnailUrl ? <img src={item.thumbnailUrl} alt=""/> : <span>{platform.slice(0,1)}</span>}<i>{platform}</i>
+    </a>
+    <div className={styles.publicationText}><b>{item.title || t('Без названия')}</b><small>{item.companyName || t('Без компании')}</small></div>
+    <span className={styles.creatorCell}>{item.creatorName}</span><span className={styles.platformCell}>{platform}</span><strong>{formatter.format(item.likes)}</strong><strong>{formatter.format(item.views)}</strong><strong>{formatter.format(item.comments)}</strong><time>{date}</time>
+  </article>
 }
 
 export function ContentGroupsPage() {

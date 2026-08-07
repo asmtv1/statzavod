@@ -552,7 +552,7 @@ func (s *Server) createContentGroup(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Server) listPublications(w http.ResponseWriter, r *http.Request) {
 	p := r.Context().Value(principalKey).(principal)
-	rows, err := s.pool.Query(r.Context(), `SELECT p.id,p.title,p.platform,p.published_at,c.display_name,COALESCE(x.id::text,''),COALESCE(x.name,''),COALESCE((SELECT views FROM publication_metric_snapshots s WHERE s.publication_id=p.id ORDER BY observed_at DESC LIMIT 1),0) FROM publications p JOIN creators c ON c.id=p.creator_id LEFT JOIN companies x ON x.id=c.company_id WHERE p.organization_id=$1 ORDER BY p.published_at DESC LIMIT 100`, p.OrganizationID)
+	rows, err := s.pool.Query(r.Context(), `SELECT p.id,p.title,p.platform,p.published_at,p.thumbnail_url,p.permalink,c.display_name,COALESCE(x.id::text,''),COALESCE(x.name,''),COALESCE(s.views,0),COALESCE(s.likes,0),COALESCE(s.comments,0),COALESCE(s.shares,0) FROM publications p JOIN creators c ON c.id=p.creator_id LEFT JOIN companies x ON x.id=c.company_id LEFT JOIN LATERAL (SELECT views,likes,comments,shares FROM publication_metric_snapshots s WHERE s.publication_id=p.id ORDER BY observed_at DESC LIMIT 1) s ON true WHERE p.organization_id=$1 ORDER BY p.published_at DESC LIMIT 100`, p.OrganizationID)
 	if err != nil {
 		problem(w, 500, "query failed", err.Error())
 		return
@@ -561,14 +561,14 @@ func (s *Server) listPublications(w http.ResponseWriter, r *http.Request) {
 	items := make([]map[string]any, 0)
 	for rows.Next() {
 		var id, platform, creator, companyID, companyName string
-		var title *string
+		var title, thumbnailURL, permalink *string
 		var published time.Time
-		var views int64
-		if err := rows.Scan(&id, &title, &platform, &published, &creator, &companyID, &companyName, &views); err != nil {
+		var views, likes, comments, shares int64
+		if err := rows.Scan(&id, &title, &platform, &published, &thumbnailURL, &permalink, &creator, &companyID, &companyName, &views, &likes, &comments, &shares); err != nil {
 			problem(w, http.StatusInternalServerError, "scan failed", err.Error())
 			return
 		}
-		items = append(items, map[string]any{"id": id, "title": title, "platform": platform, "publishedAt": published, "creatorName": creator, "companyId": companyID, "companyName": companyName, "views": views})
+		items = append(items, map[string]any{"id": id, "title": title, "platform": platform, "publishedAt": published, "thumbnailUrl": thumbnailURL, "permalink": permalink, "creatorName": creator, "companyId": companyID, "companyName": companyName, "views": views, "likes": likes, "comments": comments, "shares": shares})
 	}
 	writeJSON(w, 200, map[string]any{"items": items})
 }
