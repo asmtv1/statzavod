@@ -75,7 +75,7 @@ func (s *Server) oauthProviders() map[string]oauthProvider {
 		"instagram-facebook": {
 			ID: "INSTAGRAM", Name: "Instagram через Facebook", ClientID: s.config.InstagramFacebookClientID, ClientSecret: s.config.InstagramFacebookClientSecret,
 			RedirectURL: s.config.InstagramFacebookRedirectURL, AuthorizeURL: strings.TrimRight(s.config.InstagramFacebookOAuthBase, "/") + "/dialog/oauth",
-			Scopes: []string{"instagram_basic", "instagram_manage_insights", "pages_show_list", "pages_read_engagement"}, Flow: "FACEBOOK",
+			Scopes: []string{"instagram_basic", "instagram_manage_insights", "pages_show_list", "pages_read_engagement", "business_management"}, Flow: "FACEBOOK",
 		},
 		"tiktok": {
 			ID: "TIKTOK", Name: "TikTok", ClientID: s.config.TikTokClientKey, ClientSecret: s.config.TikTokClientSecret,
@@ -411,7 +411,23 @@ func (s *Server) completeInstagramFacebookOAuth(ctx context.Context, provider oa
 }
 
 func (s *Server) fetchFacebookPages(ctx context.Context, userAccessToken string) ([]facebookPage, error) {
-	base := strings.TrimRight(s.config.InstagramFacebookGraphAPIBase, "/") + "/me/accounts"
+	pages, err := s.fetchFacebookPagesAt(ctx, "/me/accounts", userAccessToken)
+	if err != nil || len(pages) > 0 {
+		return pages, err
+	}
+	// Pages assigned through a Business Portfolio can be absent from the
+	// user's accounts edge even when the user has task-based Page access.
+	// business_management allows the Business User assigned_pages edge used
+	// by the previously working Facebook-backed Instagram flow.
+	assignedPages, assignedErr := s.fetchFacebookPagesAt(ctx, "/me/assigned_pages", userAccessToken)
+	if assignedErr != nil {
+		return pages, nil
+	}
+	return assignedPages, nil
+}
+
+func (s *Server) fetchFacebookPagesAt(ctx context.Context, edge, userAccessToken string) ([]facebookPage, error) {
+	base := strings.TrimRight(s.config.InstagramFacebookGraphAPIBase, "/") + edge
 	query := url.Values{
 		"fields":       {"id,name,access_token,tasks,instagram_business_account"},
 		"limit":        {"100"},

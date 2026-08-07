@@ -131,6 +131,7 @@ func TestCompleteInstagramFacebookOAuthUsesLinkedPageAccessToken(t *testing.T) {
 			map[string]any{"permission": "instagram_manage_insights", "status": "granted"},
 			map[string]any{"permission": "pages_show_list", "status": "granted"},
 			map[string]any{"permission": "pages_read_engagement", "status": "granted"},
+			map[string]any{"permission": "business_management", "status": "granted"},
 		}})
 	})
 	mux.HandleFunc("/me/accounts", func(w http.ResponseWriter, r *http.Request) {
@@ -170,7 +171,7 @@ func TestCompleteInstagramFacebookOAuthUsesLinkedPageAccessToken(t *testing.T) {
 	s := &Server{config: config.Config{InstagramFacebookGraphAPIBase: server.URL}}
 	provider := oauthProvider{
 		ID: "INSTAGRAM", ClientID: "facebook-client", ClientSecret: "facebook-secret", RedirectURL: "https://app.test/callback", Flow: "FACEBOOK",
-		Scopes: []string{"instagram_basic", "instagram_manage_insights", "pages_show_list", "pages_read_engagement"},
+		Scopes: []string{"instagram_basic", "instagram_manage_insights", "pages_show_list", "pages_read_engagement", "business_management"},
 	}
 	token, profile, err := s.completeInstagramFacebookOAuth(t.Context(), provider, "code")
 	if err != nil {
@@ -181,6 +182,33 @@ func TestCompleteInstagramFacebookOAuthUsesLinkedPageAccessToken(t *testing.T) {
 	}
 	if profile.ExternalID != "ig-1" || profile.Username != "creator" || profile.Metadata["facebookPageId"] != "page-1" {
 		t.Fatalf("unexpected profile result: %#v", profile)
+	}
+}
+
+func TestFetchFacebookPagesFallsBackToBusinessAssignedPages(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/me/accounts", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{"data": []any{}})
+	})
+	mux.HandleFunc("/me/assigned_pages", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("access_token") != "user-token" {
+			t.Fatal("Facebook user token was not used for assigned Page discovery")
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"data": []any{map[string]any{
+			"id": "page-1", "name": "Assigned Page", "access_token": "page-token",
+			"instagram_business_account": map[string]any{"id": "ig-1"},
+		}}})
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	s := &Server{config: config.Config{InstagramFacebookGraphAPIBase: server.URL}}
+	pages, err := s.fetchFacebookPages(t.Context(), "user-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pages) != 1 || pages[0].ID != "page-1" || pages[0].InstagramBusinessAccount.ID != "ig-1" {
+		t.Fatalf("unexpected assigned Pages: %#v", pages)
 	}
 }
 
