@@ -451,9 +451,12 @@ function PlatformConnections({ creatorID }: { creatorID: string }) {
   const [disconnectedPlatform, setDisconnectedPlatform] = useState<Platform | null>(null)
   const [pendingDisconnect, setPendingDisconnect] = useState<PlatformConnection | null>(null)
   const [disconnectError, setDisconnectError] = useState('')
+  const [syncQueuedAccounts, setSyncQueuedAccounts] = useState<Set<string>>(new Set())
   const [selectedInstagramAccounts, setSelectedInstagramAccounts] = useState<Set<string>>(new Set())
   const me = useQuery({ queryKey: ['me'], queryFn: api.me })
-  const connections = useQuery({ queryKey: ['platform-connections', creatorID, locale], queryFn: () => api.connections(creatorID) })
+  const connections = useQuery({ queryKey: ['platform-connections', creatorID, locale], queryFn: () => api.connections(creatorID), refetchInterval: 30_000 })
+  const vkAccess = useQuery({ queryKey: ['creator-vk-access', creatorID, locale], queryFn: () => api.creatorVkAccess(creatorID), refetchInterval: 30_000 })
+  const companyVKAccounts = useQuery({ queryKey: ['company-vk-accounts', locale], queryFn: api.companyVkAccounts, refetchInterval: 30_000 })
   const integrations = useQuery({ queryKey: ['integrations', locale], queryFn: api.integrations })
   const authorize = useMutation({
     mutationFn: (platform: string) => api.startAuthorization(creatorID, platform),
@@ -480,6 +483,18 @@ function PlatformConnections({ creatorID }: { creatorID: string }) {
     },
     onError: (error) => setDisconnectError(error instanceof Error ? error.message : t('Не удалось отвязать аккаунт.')),
   })
+  const sync = useMutation({
+    mutationFn: (accountID: string) => api.requestPlatformSync(accountID),
+    onSuccess: async (_, accountID) => {
+      setSyncQueuedAccounts(current => new Set(current).add(accountID))
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['platform-connections', creatorID] }),
+        queryClient.invalidateQueries({ queryKey: ['company-vk-accounts'] }),
+        queryClient.invalidateQueries({ queryKey: ['integrations'] }),
+        queryClient.invalidateQueries({ queryKey: ['sync-health'] }),
+      ])
+    },
+  })
   const callbackPlatform = params.get('platform')?.toUpperCase()
   const result = params.get('oauth')
   const selectionID = result === 'select' ? params.get('selection') ?? '' : ''
@@ -493,6 +508,22 @@ function PlatformConnections({ creatorID }: { creatorID: string }) {
   })
   const configured = new Map(integrations.data?.items.map(item => [item.id, item.configured]))
   const canDisconnect = me.data?.role === 'ADMIN' || me.data?.role === 'ANALYST'
+  const assignedVKAccount = companyVKAccounts.data?.items.find(account => account.id === vkAccess.data?.accountId)
+  const vkConnection: PlatformConnection | null = assignedVKAccount?.platformAccountId && assignedVKAccount.oauthStatus === 'ACTIVE' ? {
+    id: assignedVKAccount.platformAccountId,
+    platform: 'VK',
+    username: assignedVKAccount.oauthUsername || assignedVKAccount.oauthDisplayName || 'vk',
+    displayName: assignedVKAccount.oauthDisplayName || assignedVKAccount.oauthUsername || 'VK ID',
+    status: assignedVKAccount.oauthStatus,
+    oauthStatus: assignedVKAccount.oauthStatus,
+    avatarUrl: assignedVKAccount.oauthAvatarUrl,
+    profileUrl: vkAccess.data?.communityUrl || assignedVKAccount.oauthProfileUrl,
+    scopes: [],
+    lastSyncedAt: assignedVKAccount.lastSyncedAt,
+    bioDescription: vkAccess.data?.companyName ? `${t('Общий аккаунт фирмы')} · ${vkAccess.data.companyName}` : t('Общий аккаунт фирмы'),
+  } : null
+  const visibleConnections = [...(connections.data?.items ?? []), ...(vkConnection ? [vkConnection] : [])]
+  const connectionsPending = connections.isPending || vkAccess.isPending || companyVKAccounts.isPending
   const clearOAuthParams = useCallback(() => {
     setParams(current => {
       const next = new URLSearchParams(current)
@@ -536,6 +567,7 @@ function PlatformConnections({ creatorID }: { creatorID: string }) {
     <div className={styles.connectionHead}><div><h2>{t('Подключения платформ')}</h2><p>{t('Официальные OAuth-подключения для автоматического сбора статистики.')}</p></div></div>
     {result && result !== 'connected' && result !== 'select' ? <p className={styles.error}>{t('Подключение')} {callbackPlatform ?? t('аккаунта')} {t('не завершено:')} {result}.</p> : null}
     {authorize.isError ? <p className={styles.error}>{t(authorize.error.message)}</p> : null}
+    {sync.isError ? <p className={styles.error}>{t(sync.error.message)}</p> : null}
     {disconnectError && !pendingDisconnect ? <p className={styles.error}>{t(disconnectError)}</p> : null}
     <div className={styles.platformGrid}>{platformOptions.map(platform => {
       const platformConnections = connections.data?.items.filter(item => item.platform === platform.id) ?? []
@@ -545,9 +577,13 @@ function PlatformConnections({ creatorID }: { creatorID: string }) {
         <div><button onClick={() => authorize.mutate(platform.id)} disabled={authorize.isPending || integrations.isPending || isConfigured === false}>{authorize.isPending && authorize.variables === platform.id ? t('Переходим…') : t('Подключить')}</button>{platform.id === 'INSTAGRAM' ? <button onClick={() => authorize.mutate('instagram-facebook')} disabled={authorize.isPending || integrations.isPending} title={t('Нужна Facebook Page, связанная с профессиональным Instagram')}>{t('Через Facebook · коллаборации')}</button> : null}</div>
       </article>
     })}</div>
-    {connections.isPending ? <p>{t('Загружаем подключения…')}</p> : connections.data?.items.length ? <div className={styles.connectionList}>{connections.data.items.map(connection => <article key={connection.id}>
+    {connectionsPending ? <p>{t('Загружаем подключения…')}</p> : visibleConnections.length ? <div className={styles.connectionList}>{visibleConnections.map(connection => <article key={connection.id}>
       <div>{connection.avatarUrl ? <img src={connection.avatarUrl} alt="" /> : null}<div><b>{connection.displayName}{connection.isVerified ? ' ✓' : ''}</b><span>{connection.platform} · @{connection.username} · {connectionStatus(connection.status, t)}</span>{connection.bioDescription ? <small>{connection.bioDescription}</small> : null}<small>{connectionPermissions(connection.platform, connection.scopes, t)}{connection.lastSyncedAt ? ` · ${t('синхронизация')} ${new Date(connection.lastSyncedAt).toLocaleString(locale === 'en' ? 'en-US' : 'ru-RU')}` : ''}</small></div></div>
-      <div className={styles.connectionActions}>{connection.profileUrl ? <a href={connection.profileUrl} target="_blank" rel="noreferrer">{t('Открыть')}</a> : null}{canDisconnect ? <button type="button" className={styles.danger} onClick={() => { setDisconnectError(''); setPendingDisconnect(connection) }} disabled={disconnect.isPending}>{t('Отвязать аккаунт')}</button> : null}</div>
+      <div className={styles.connectionActions}>
+        {connection.profileUrl ? <a href={connection.profileUrl} target="_blank" rel="noreferrer">{t('Открыть')}</a> : null}
+        <button type="button" onClick={() => sync.mutate(connection.id)} disabled={sync.isPending}>{sync.isPending && sync.variables === connection.id ? t('Ставим в очередь…') : syncQueuedAccounts.has(connection.id) ? t('Синхронизация запрошена') : t('Синхронизировать сейчас')}</button>
+        {canDisconnect && connection.platform !== 'VK' ? <button type="button" className={styles.danger} onClick={() => { setDisconnectError(''); setPendingDisconnect(connection) }} disabled={disconnect.isPending}>{t('Отвязать аккаунт')}</button> : null}
+      </div>
     </article>)}</div> : <p className={styles.empty}>{t('Аккаунты ещё не подключены.')}</p>}
     {pendingDisconnect ? <div className={styles.dialogBackdrop} role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !disconnect.isPending) { setPendingDisconnect(null); setDisconnectError('') } }}>
       <div className={styles.confirmDialog} role="dialog" aria-modal="true" aria-labelledby="disconnect-account-title">
