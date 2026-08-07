@@ -63,6 +63,34 @@ func TestCreatorOwnershipMigrationContract(t *testing.T) {
 	}
 }
 
+func TestCreatorDeletionSchemaRepairMigrationContract(t *testing.T) {
+	normalized := normalizeSQL(migrationUp(t, "00018_repair_creator_deletion_schema.sql"))
+
+	if !strings.Contains(normalized, "add column if not exists created_by uuid references users(id) on delete set null;") {
+		t.Fatal("repair migration must restore creators.created_by when migration 17 was recorded without it")
+	}
+	if !strings.Contains(normalized, "where creator.created_by is null") {
+		t.Fatal("repair migration must not overwrite existing creator ownership")
+	}
+
+	for _, table := range []string{
+		"creator_contacts",
+		"creator_account_assignments",
+		"publications",
+		"content_groups",
+		"content_match_suggestions",
+		"oauth_states",
+	} {
+		pattern := `alter table ` + regexp.QuoteMeta(table) +
+		` [^;]*drop constraint if exists ` + regexp.QuoteMeta(table) +
+		`_creator_id_fkey, add constraint ` + regexp.QuoteMeta(table) +
+		`_creator_id_fkey foreign key \(creator_id\) references creators\(id\) on delete cascade;`
+		if !regexp.MustCompile(pattern).MatchString(normalized) {
+			t.Fatalf("repair migration must restore cascade for %s.creator_id", table)
+		}
+	}
+}
+
 func TestExistingCreatorOwnedForeignKeysCascade(t *testing.T) {
 	tests := []struct {
 		name       string
