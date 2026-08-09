@@ -451,12 +451,14 @@ function PlatformConnections({ creatorID }: { creatorID: string }) {
   const [disconnectedPlatform, setDisconnectedPlatform] = useState<Platform | null>(null)
   const [pendingDisconnect, setPendingDisconnect] = useState<PlatformConnection | null>(null)
   const [disconnectError, setDisconnectError] = useState('')
-  const [syncQueuedAccounts, setSyncQueuedAccounts] = useState<Set<string>>(new Set())
+  const [syncFeedback, setSyncFeedback] = useState<Record<string, { status: 'QUEUED'|'SUCCESS'|'ERROR'; lastSyncedAt: string|null; consecutiveFailures: number; requestedAt: number; message?: string }>>({})
+  const [syncPollTick, setSyncPollTick] = useState(0)
   const [selectedInstagramAccounts, setSelectedInstagramAccounts] = useState<Set<string>>(new Set())
+  const hasPendingSync = Object.values(syncFeedback).some(item => item.status === 'QUEUED')
   const me = useQuery({ queryKey: ['me'], queryFn: api.me })
-  const connections = useQuery({ queryKey: ['platform-connections', creatorID, locale], queryFn: () => api.connections(creatorID), refetchInterval: 30_000 })
+  const connections = useQuery({ queryKey: ['platform-connections', creatorID, locale], queryFn: () => api.connections(creatorID), refetchInterval: hasPendingSync ? 3_000 : 30_000 })
   const vkAccess = useQuery({ queryKey: ['creator-vk-access', creatorID, locale], queryFn: () => api.creatorVkAccess(creatorID), refetchInterval: 30_000 })
-  const companyVKAccounts = useQuery({ queryKey: ['company-vk-accounts', locale], queryFn: api.companyVkAccounts, refetchInterval: 30_000 })
+  const companyVKAccounts = useQuery({ queryKey: ['company-vk-accounts', locale], queryFn: api.companyVkAccounts, refetchInterval: hasPendingSync ? 3_000 : 30_000 })
   const integrations = useQuery({ queryKey: ['integrations', locale], queryFn: api.integrations })
   const authorize = useMutation({
     mutationFn: (platform: string) => api.startAuthorization(creatorID, platform),
@@ -484,9 +486,14 @@ function PlatformConnections({ creatorID }: { creatorID: string }) {
     onError: (error) => setDisconnectError(error instanceof Error ? error.message : t('Не удалось отвязать аккаунт.')),
   })
   const sync = useMutation({
-    mutationFn: (accountID: string) => api.requestPlatformSync(accountID),
-    onSuccess: async (_, accountID) => {
-      setSyncQueuedAccounts(current => new Set(current).add(accountID))
+    mutationFn: (connection: PlatformConnection) => api.requestPlatformSync(connection.id),
+    onSuccess: async (_, connection) => {
+      setSyncFeedback(current => ({ ...current, [connection.id]: {
+        status: 'QUEUED',
+        lastSyncedAt: connection.lastSyncedAt,
+        consecutiveFailures: connection.consecutiveFailures,
+        requestedAt: Date.now(),
+      } }))
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['platform-connections', creatorID] }),
         queryClient.invalidateQueries({ queryKey: ['company-vk-accounts'] }),
@@ -520,10 +527,42 @@ function PlatformConnections({ creatorID }: { creatorID: string }) {
     profileUrl: vkAccess.data?.communityUrl || assignedVKAccount.oauthProfileUrl,
     scopes: [],
     lastSyncedAt: assignedVKAccount.lastSyncedAt,
+    lastSuccessAt: assignedVKAccount.lastSuccessAt,
+    syncError: assignedVKAccount.syncError,
+    consecutiveFailures: assignedVKAccount.consecutiveFailures,
     bioDescription: vkAccess.data?.companyName ? `${t('Общий аккаунт фирмы')} · ${vkAccess.data.companyName}` : t('Общий аккаунт фирмы'),
   } : null
   const visibleConnections = [...(connections.data?.items ?? []), ...(vkConnection ? [vkConnection] : [])]
   const connectionsPending = connections.isPending || vkAccess.isPending || companyVKAccounts.isPending
+
+  useEffect(() => {
+    if (!hasPendingSync) return
+    const timer = window.setInterval(() => setSyncPollTick(current => current + 1), 3_000)
+    return () => window.clearInterval(timer)
+  }, [hasPendingSync])
+
+  useEffect(() => {
+    setSyncFeedback(current => {
+      let changed = false
+      const next = { ...current }
+      for (const [accountID, feedback] of Object.entries(current)) {
+        if (feedback.status !== 'QUEUED') continue
+        const connection = visibleConnections.find(item => item.id === accountID)
+        if (!connection) continue
+        if (connection.lastSyncedAt && connection.lastSyncedAt !== feedback.lastSyncedAt) {
+          next[accountID] = { ...feedback, status: 'SUCCESS' }
+          changed = true
+        } else if (connection.consecutiveFailures > feedback.consecutiveFailures) {
+          next[accountID] = { ...feedback, status: 'ERROR', message: connection.syncError || t('Синхронизация завершилась с ошибкой.') }
+          changed = true
+        } else if (Date.now() - feedback.requestedAt > 120_000) {
+          next[accountID] = { ...feedback, status: 'ERROR', message: t('Синхронизация не завершилась за две минуты. Проверьте состояние worker.') }
+          changed = true
+        }
+      }
+      return changed ? next : current
+    })
+  }, [connections.data, companyVKAccounts.data, vkAccess.data, syncPollTick, t])
   const clearOAuthParams = useCallback(() => {
     setParams(current => {
       const next = new URLSearchParams(current)
@@ -577,14 +616,19 @@ function PlatformConnections({ creatorID }: { creatorID: string }) {
         <div><button onClick={() => authorize.mutate(platform.id)} disabled={authorize.isPending || integrations.isPending || isConfigured === false}>{authorize.isPending && authorize.variables === platform.id ? t('Переходим…') : t('Подключить')}</button>{platform.id === 'INSTAGRAM' ? <button onClick={() => authorize.mutate('instagram-facebook')} disabled={authorize.isPending || integrations.isPending} title={t('Нужна Facebook Page, связанная с профессиональным Instagram')}>{t('Через Facebook · коллаборации')}</button> : null}</div>
       </article>
     })}</div>
-    {connectionsPending ? <p>{t('Загружаем подключения…')}</p> : visibleConnections.length ? <div className={styles.connectionList}>{visibleConnections.map(connection => <article key={connection.id}>
+    {connectionsPending ? <p>{t('Загружаем подключения…')}</p> : visibleConnections.length ? <div className={styles.connectionList}>{visibleConnections.map(connection => {
+      const feedback = syncFeedback[connection.id]
+      const isQueuing = sync.isPending && sync.variables?.id === connection.id
+      const syncLabel = isQueuing ? t('Ставим в очередь…') : feedback?.status === 'QUEUED' ? t('Синхронизация выполняется…') : feedback?.status === 'SUCCESS' ? t('Синхронизировано') : feedback?.status === 'ERROR' ? t('Повторить синхронизацию') : t('Синхронизировать сейчас')
+      return <article key={connection.id}>
       <div>{connection.avatarUrl ? <img src={connection.avatarUrl} alt="" /> : null}<div><b>{connection.displayName}{connection.isVerified ? ' ✓' : ''}</b><span>{connection.platform} · @{connection.username} · {connectionStatus(connection.status, t)}</span>{connection.bioDescription ? <small>{connection.bioDescription}</small> : null}<small>{connectionPermissions(connection.platform, connection.scopes, t)}{connection.lastSyncedAt ? ` · ${t('синхронизация')} ${new Date(connection.lastSyncedAt).toLocaleString(locale === 'en' ? 'en-US' : 'ru-RU')}` : ''}</small></div></div>
       <div className={styles.connectionActions}>
         {connection.profileUrl ? <a href={connection.profileUrl} target="_blank" rel="noreferrer">{t('Открыть')}</a> : null}
-        <button type="button" onClick={() => sync.mutate(connection.id)} disabled={sync.isPending}>{sync.isPending && sync.variables === connection.id ? t('Ставим в очередь…') : syncQueuedAccounts.has(connection.id) ? t('Синхронизация запрошена') : t('Синхронизировать сейчас')}</button>
+        <button type="button" className={feedback?.status === 'SUCCESS' ? styles.syncComplete : ''} onClick={() => sync.mutate(connection)} disabled={isQueuing || feedback?.status === 'QUEUED'}>{syncLabel}</button>
         {canDisconnect && connection.platform !== 'VK' ? <button type="button" className={styles.danger} onClick={() => { setDisconnectError(''); setPendingDisconnect(connection) }} disabled={disconnect.isPending}>{t('Отвязать аккаунт')}</button> : null}
+        {feedback?.status === 'ERROR' ? <span className={styles.connectionSyncError}>{feedback.message}</span> : null}
       </div>
-    </article>)}</div> : <p className={styles.empty}>{t('Аккаунты ещё не подключены.')}</p>}
+    </article>})}</div> : <p className={styles.empty}>{t('Аккаунты ещё не подключены.')}</p>}
     {pendingDisconnect ? <div className={styles.dialogBackdrop} role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !disconnect.isPending) { setPendingDisconnect(null); setDisconnectError('') } }}>
       <div className={styles.confirmDialog} role="dialog" aria-modal="true" aria-labelledby="disconnect-account-title">
         <div><span className={styles.dialogMark}>!</span><div><h3 id="disconnect-account-title">{t('Отвязать аккаунт?')}</h3><p><b>{pendingDisconnect.displayName}</b> · {pendingDisconnect.platform}</p></div></div>

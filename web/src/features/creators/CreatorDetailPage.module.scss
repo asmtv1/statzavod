@@ -757,6 +757,16 @@ button:disabled {
   color: #ff9b8f;
   border-color: rgb(255 155 143 / 30%);
 }
+.connectionActions .syncComplete {
+  color: #bcefd0;
+  border-color: rgb(156 229 189 / 30%);
+}
+.connectionActions .connectionSyncError {
+  flex-basis: 100%;
+  color: #ff9b8f;
+  font-size: 0.72rem;
+  text-align: right;
+}
 .contacts > p {
   color: #d5cec2;
 }

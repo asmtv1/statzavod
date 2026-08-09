@@ -906,7 +906,7 @@ func (s *Server) savePlatformConnectionTx(ctx context.Context, tx pgx.Tx, organi
 func (s *Server) platformConnections(w http.ResponseWriter, r *http.Request) {
 	p := r.Context().Value(principalKey).(principal)
 	creatorID := chi.URLParam(r, "id")
-	rows, err := s.pool.Query(r.Context(), `SELECT a.id,a.platform,a.username,a.display_name,a.status,COALESCE(a.avatar_url,''),COALESCE(a.profile_url,''),COALESCE(c.scopes,'{}'),a.last_synced_at,COALESCE(c.status,''),a.metadata FROM platform_accounts a JOIN creator_account_assignments x ON x.platform_account_id=a.id AND x.valid_to IS NULL LEFT JOIN oauth_connections c ON c.platform_account_id=a.id WHERE x.creator_id=$1 AND a.organization_id=$2 AND a.status<>'DISCONNECTED' ORDER BY a.platform,a.created_at DESC`, creatorID, p.OrganizationID)
+	rows, err := s.pool.Query(r.Context(), `SELECT a.id,a.platform,a.username,a.display_name,a.status,COALESCE(a.avatar_url,''),COALESCE(a.profile_url,''),COALESCE(c.scopes,'{}'),a.last_synced_at,COALESCE(c.status,''),a.metadata,COALESCE(st.last_error,a.last_error,''),COALESCE(st.consecutive_failures,0),st.last_success_at FROM platform_accounts a JOIN creator_account_assignments x ON x.platform_account_id=a.id AND x.valid_to IS NULL LEFT JOIN oauth_connections c ON c.platform_account_id=a.id LEFT JOIN LATERAL (SELECT last_error,consecutive_failures,last_success_at FROM sync_targets WHERE target_id=a.id AND organization_id=a.organization_id AND status='ACTIVE' ORDER BY next_sync_at DESC LIMIT 1) st ON true WHERE x.creator_id=$1 AND a.organization_id=$2 AND a.status<>'DISCONNECTED' ORDER BY a.platform,a.created_at DESC`, creatorID, p.OrganizationID)
 	if err != nil {
 		problem(w, http.StatusInternalServerError, "connections failed", "could not load platform connections")
 		return
@@ -914,17 +914,18 @@ func (s *Server) platformConnections(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 	items := make([]map[string]any, 0)
 	for rows.Next() {
-		var id, platform, username, display, status, avatar, profileURL, oauthStatus string
+		var id, platform, username, display, status, avatar, profileURL, oauthStatus, syncError string
 		var scopes []string
 		var metadata []byte
-		var synced *time.Time
-		if err := rows.Scan(&id, &platform, &username, &display, &status, &avatar, &profileURL, &scopes, &synced, &oauthStatus, &metadata); err != nil {
+		var synced, lastSuccessAt *time.Time
+		var consecutiveFailures int
+		if err := rows.Scan(&id, &platform, &username, &display, &status, &avatar, &profileURL, &scopes, &synced, &oauthStatus, &metadata, &syncError, &consecutiveFailures, &lastSuccessAt); err != nil {
 			problem(w, http.StatusInternalServerError, "connections failed", "could not read platform connection")
 			return
 		}
 		values := map[string]any{}
 		_ = json.Unmarshal(metadata, &values)
-		items = append(items, map[string]any{"id": id, "platform": platform, "username": username, "displayName": display, "status": status, "oauthStatus": oauthStatus, "avatarUrl": avatar, "profileUrl": profileURL, "scopes": scopes, "lastSyncedAt": synced, "bioDescription": values["bioDescription"], "isVerified": values["isVerified"]})
+		items = append(items, map[string]any{"id": id, "platform": platform, "username": username, "displayName": display, "status": status, "oauthStatus": oauthStatus, "avatarUrl": avatar, "profileUrl": profileURL, "scopes": scopes, "lastSyncedAt": synced, "lastSuccessAt": lastSuccessAt, "syncError": syncError, "consecutiveFailures": consecutiveFailures, "bioDescription": values["bioDescription"], "isVerified": values["isVerified"]})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
@@ -983,7 +984,7 @@ func (s *Server) integrationStatus(w http.ResponseWriter, r *http.Request) {
 		ORDER BY
 			CASE
 				WHEN a.status <> 'ACTIVE' OR COALESCE(o.status, '') <> 'ACTIVE' OR a.last_error <> '' THEN 0
-				WHEN o.expires_at IS NOT NULL AND o.expires_at <= now() + interval '7 days' THEN 1
+				WHEN COALESCE(st.consecutive_failures, 0) > 0 THEN 1
 				ELSE 2
 			END,
 			cr.display_name,
@@ -1032,16 +1033,14 @@ func (s *Server) integrationStatus(w http.ResponseWriter, r *http.Request) {
 			health, message = "ERROR", localized(r, "Авторизация недействительна", "Authorization is invalid")
 		case expiresAt != nil && !expiresAt.After(now):
 			health, message = "ERROR", localized(r, "Токен истёк", "The token has expired")
+		case consecutiveFailures > 0:
+			health, message = "WARNING", fmt.Sprintf(localized(r, "Ошибок синхронизации подряд: %d", "Consecutive synchronization failures: %d"), consecutiveFailures)
 		case lastError != "":
 			message = lastError
 			if englishRequest(r) && containsCyrillic(message) {
 				message = "Synchronization failed"
 			}
 			health = "ERROR"
-		case consecutiveFailures > 0:
-			health, message = "ERROR", fmt.Sprintf(localized(r, "Ошибок синхронизации подряд: %d", "Consecutive synchronization failures: %d"), consecutiveFailures)
-		case expiresAt != nil && expiresAt.Before(now.Add(7*24*time.Hour)):
-			health, message = "WARNING", localized(r, "Срок действия токена скоро закончится", "The token will expire soon")
 		case lastSyncedAt == nil:
 			health, message = "PENDING", localized(r, "Ожидает первой синхронизации", "Waiting for the first synchronization")
 		}

@@ -79,10 +79,11 @@ export function IntegrationsPage() {
   const [bulkSelection, setBulkSelection] = useState<string[]>([])
   const result = useQuery({ queryKey: ['integrations', locale], queryFn: api.integrations, refetchInterval: 60_000 })
   const authorize = useMutation({ mutationFn: ({ creatorId, platform }: { creatorId:string; platform:Platform }) => api.startAuthorization(creatorId, platform), onSuccess: ({ authorizationUrl }) => window.location.assign(authorizationUrl) })
+  const retrySync = useMutation({ mutationFn: api.requestPlatformSync, onSuccess: () => result.refetch() })
   const accounts = result.data?.accounts ?? []
   const problemAccounts = useMemo(() => accounts.filter(account => account.health === 'ERROR' || account.health === 'WARNING'), [accounts])
   const healthy = accounts.filter(account => account.health === 'HEALTHY').length
-  const expiring = accounts.filter(account => account.health === 'WARNING').length
+  const syncFailures = accounts.filter(account => account.health === 'WARNING').length
   const visible = accounts.filter(account => filter === 'ALL' || (filter === 'PROBLEMS' ? account.health === 'ERROR' || account.health === 'WARNING' : account.health === 'HEALTHY'))
   const selectedAccounts = problemAccounts.filter(account => bulkSelection.includes(account.id))
   const toggleBulk = () => { setBulkSelection(problemAccounts.map(account => account.id)); setBulkOpen(true) }
@@ -95,13 +96,13 @@ export function IntegrationsPage() {
         <div className={styles.syncMetrics}>
           <article><span>{t('Всего аккаунтов')}</span><strong>{accounts.length}</strong><small>{t('в мониторинге')}</small></article>
           <article><span>{t('Работают')}</span><strong className={styles.healthyMetric}>{healthy}</strong><small>{t('без ошибок')}</small></article>
-          <article><span>{t('Требуют внимания')}</span><strong className={problemAccounts.length ? styles.errorMetric : ''}>{problemAccounts.length}</strong><small>{expiring ? `${expiring} ${t('с истекающим токеном')}` : t('критичных проблем нет')}</small></article>
+          <article><span>{t('Требуют внимания')}</span><strong className={problemAccounts.length ? styles.errorMetric : ''}>{problemAccounts.length}</strong><small>{syncFailures ? `${syncFailures} ${t('с ошибками синхронизации')}` : t('критичных проблем нет')}</small></article>
         </div>
         <button className={styles.bulkButton} onClick={toggleBulk} disabled={!problemAccounts.length}>{t('Переподключить проблемные')}</button>
       </div>
       <div className={styles.syncPanel}>
         <div className={styles.syncPanelHead}>
-          <div><h2>{t('Аккаунты креаторов')}</h2><p>{t('Ошибки и истекающие токены показываются первыми.')}</p></div>
+          <div><h2>{t('Аккаунты креаторов')}</h2><p>{t('Ошибки подключений и синхронизации показываются первыми.')}</p></div>
           <div className={styles.filters} role="group" aria-label={t('Фильтр подключений')}>
             <button className={filter === 'ALL' ? styles.activeFilter : ''} onClick={() => setFilter('ALL')}>{t('Все')} <span>{accounts.length}</span></button>
             <button className={filter === 'PROBLEMS' ? styles.activeFilter : ''} onClick={() => setFilter('PROBLEMS')}>{t('Проблемы')} <span>{problemAccounts.length}</span></button>
@@ -114,7 +115,7 @@ export function IntegrationsPage() {
             <div className={styles.accountIdentity}><span className={`${styles.platformMark} ${styles[account.platform.toLowerCase()]}`}>{platformNames[account.platform].slice(0, 2)}</span><div><Link to={`/app/creators/${account.creatorId}`}>{account.creatorName}</Link><small>{platformNames[account.platform]} · @{account.username || account.displayName}</small></div></div>
             <div className={styles.healthCell}><span className={`${styles.healthBadge} ${styles[account.health.toLowerCase()]}`}><i />{healthLabel(account.health)}</span><small>{t(account.message)}</small></div>
             <div className={styles.syncTime}><strong>{date(account.lastSyncedAt)}</strong><small>{account.tokenExpiresAt ? `${t('Токен до')} ${date(account.tokenExpiresAt, '—')}` : t('Без срока действия')}</small></div>
-            <div className={styles.rowActions}>{account.health !== 'HEALTHY' ? <button onClick={() => authorize.mutate({ creatorId:account.creatorId, platform:account.platform })} disabled={authorize.isPending}>{authorize.isPending && authorize.variables?.creatorId === account.creatorId && authorize.variables.platform === account.platform ? t('Переходим…') : t('Переподключить')}</button> : <Link to={`/app/creators/${account.creatorId}`}>{t('Открыть')}</Link>}</div>
+            <div className={styles.rowActions}>{account.health === 'WARNING' ? <button onClick={() => retrySync.mutate(account.id)} disabled={retrySync.isPending}>{retrySync.isPending && retrySync.variables === account.id ? t('Ставим в очередь…') : t('Повторить синхронизацию')}</button> : account.health === 'ERROR' ? <button onClick={() => authorize.mutate({ creatorId:account.creatorId, platform:account.platform })} disabled={authorize.isPending}>{authorize.isPending && authorize.variables?.creatorId === account.creatorId && authorize.variables.platform === account.platform ? t('Переходим…') : t('Переподключить')}</button> : <Link to={`/app/creators/${account.creatorId}`}>{t('Открыть')}</Link>}</div>
           </article>)}
         </div> : <div className={styles.syncEmpty}><h2>{accounts.length ? t('По этому фильтру ничего нет') : t('Подключений пока нет')}</h2><p>{accounts.length ? t('Выберите другой статус подключения.') : t('Подключите платформу в карточке креатора — аккаунт сразу появится в мониторинге.')}</p>{!accounts.length ? <Link to="/app/creators">{t('Перейти к креаторам')}</Link> : null}</div>}
       </div>
