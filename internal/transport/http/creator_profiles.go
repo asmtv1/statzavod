@@ -142,19 +142,14 @@ func (s *Server) updateCreator(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	newCompanyID := strings.TrimSpace(in.CompanyID)
-	newCompanyName := ""
-	var companyID any
-	if newCompanyID != "" {
-		if err := tx.QueryRow(r.Context(), `SELECT name FROM companies WHERE id=$1 AND organization_id=$2 AND archived_at IS NULL`, newCompanyID, p.OrganizationID).Scan(&newCompanyName); err == pgx.ErrNoRows {
-			problem(w, http.StatusBadRequest, "invalid company", "company does not exist")
-			return
-		} else if err != nil {
-			problem(w, http.StatusInternalServerError, "update failed", "could not validate company")
-			return
-		}
-		companyID = newCompanyID
+	// A creator profile is permanently scoped to its company. Accept the
+	// current ID for older clients that still echo it, but never move profiles.
+	if requestedCompanyID := strings.TrimSpace(in.CompanyID); requestedCompanyID != "" && requestedCompanyID != old.CompanyID {
+		problem(w, http.StatusConflict, "company is immutable", "creator profiles cannot be moved between companies")
+		return
 	}
+	companyID := old.CompanyID
+	newCompanyName := old.CompanyName
 
 	firstName := strings.TrimSpace(in.FirstName)
 	lastName := strings.TrimSpace(in.LastName)
@@ -178,10 +173,15 @@ func (s *Server) updateCreator(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if len(changes) == 0 {
+		if err = s.writeAudit(r.Context(), tx, requestAuditRecord(r, p, &companyID, "UPDATE", "CREATOR", &id, http.StatusNoContent, map[string]any{"changed": false})); err != nil {
+			problem(w, http.StatusInternalServerError, "update failed", "could not save audit record")
+			return
+		}
 		if err := tx.Commit(r.Context()); err != nil {
 			problem(w, http.StatusInternalServerError, "update failed", "could not finish creator update")
 			return
 		}
+		markResponseAuditCommitted(w)
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -194,7 +194,7 @@ func (s *Server) updateCreator(w http.ResponseWriter, r *http.Request) {
 		problem(w, http.StatusInternalServerError, "update failed", "could not save creator history")
 		return
 	}
-	if _, err = tx.Exec(r.Context(), `INSERT INTO audit_logs(organization_id,actor_id,action,entity_type,entity_id) VALUES($1,$2,'UPDATE','CREATOR',$3)`, p.OrganizationID, p.ID, id); err != nil {
+	if err = s.writeAudit(r.Context(), tx, requestAuditRecord(r, p, &companyID, "UPDATE", "CREATOR", &id, http.StatusNoContent, map[string]any{})); err != nil {
 		problem(w, http.StatusInternalServerError, "update failed", "could not save audit record")
 		return
 	}
@@ -202,6 +202,7 @@ func (s *Server) updateCreator(w http.ResponseWriter, r *http.Request) {
 		problem(w, http.StatusInternalServerError, "update failed", "could not commit creator update")
 		return
 	}
+	markResponseAuditCommitted(w)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -235,8 +236,8 @@ func (s *Server) updateCreatorWorkStatus(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	defer tx.Rollback(r.Context())
-	var oldStatus, oldComment string
-	err = tx.QueryRow(r.Context(), `SELECT work_status,work_comment FROM creators WHERE id=$1 AND organization_id=$2 FOR UPDATE`, id, p.OrganizationID).Scan(&oldStatus, &oldComment)
+	var oldStatus, oldComment, companyID string
+	err = tx.QueryRow(r.Context(), `SELECT work_status,work_comment,company_id::text FROM creators WHERE id=$1 AND organization_id=$2 FOR UPDATE`, id, p.OrganizationID).Scan(&oldStatus, &oldComment, &companyID)
 	if err == pgx.ErrNoRows {
 		problem(w, http.StatusNotFound, "not found", "creator does not exist")
 		return
@@ -261,15 +262,16 @@ func (s *Server) updateCreatorWorkStatus(w http.ResponseWriter, r *http.Request)
 			problem(w, http.StatusInternalServerError, "update failed", "could not save creator work history")
 			return
 		}
-		if _, err = tx.Exec(r.Context(), `INSERT INTO audit_logs(organization_id,actor_id,action,entity_type,entity_id,metadata) VALUES($1,$2,'UPDATE_WORK_STATUS','CREATOR',$3,jsonb_build_object('status',$4::text))`, p.OrganizationID, p.ID, id, status); err != nil {
-			problem(w, http.StatusInternalServerError, "update failed", "could not save work status history")
-			return
-		}
+	}
+	if err = s.writeAudit(r.Context(), tx, requestAuditRecord(r, p, &companyID, "UPDATE_WORK_STATUS", "CREATOR", &id, http.StatusNoContent, map[string]any{"status": status, "changed": len(changes) > 0})); err != nil {
+		problem(w, http.StatusInternalServerError, "update failed", "could not save work status history")
+		return
 	}
 	if err = tx.Commit(r.Context()); err != nil {
 		problem(w, http.StatusInternalServerError, "update failed", "could not commit creator work update")
 		return
 	}
+	markResponseAuditCommitted(w)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -328,8 +330,8 @@ func (s *Server) saveCreatorCredentials(w http.ResponseWriter, r *http.Request) 
 		problem(w, http.StatusBadRequest, "invalid credentials", "expected credentials array")
 		return
 	}
-	var owned bool
-	if err := s.pool.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM creators WHERE id=$1 AND organization_id=$2)`, id, p.OrganizationID).Scan(&owned); err != nil || !owned {
+	var companyID string
+	if err := s.pool.QueryRow(r.Context(), `SELECT company_id::text FROM creators WHERE id=$1 AND organization_id=$2`, id, p.OrganizationID).Scan(&companyID); err != nil {
 		problem(w, http.StatusNotFound, "not found", "creator does not exist")
 		return
 	}
@@ -416,16 +418,15 @@ func (s *Server) saveCreatorCredentials(w http.ResponseWriter, r *http.Request) 
 		problem(w, http.StatusInternalServerError, "save failed", "could not save credentials history")
 		return
 	}
-	if len(changes) > 0 {
-		if _, err = tx.Exec(r.Context(), `INSERT INTO audit_logs(organization_id,actor_id,action,entity_type,entity_id,metadata) VALUES($1,$2,'UPDATE_CREDENTIALS','CREATOR',$3,jsonb_build_object('fields',$4::integer))`, p.OrganizationID, p.ID, id, len(changes)); err != nil {
-			problem(w, http.StatusInternalServerError, "save failed", "could not save credentials history")
-			return
-		}
+	if err = s.writeAudit(r.Context(), tx, requestAuditRecord(r, p, &companyID, "UPDATE_CREDENTIALS", "CREATOR", &id, http.StatusNoContent, map[string]any{"fields": len(changes), "changed": len(changes) > 0})); err != nil {
+		problem(w, http.StatusInternalServerError, "save failed", "could not save credentials history")
+		return
 	}
 	if err = tx.Commit(r.Context()); err != nil {
 		problem(w, http.StatusInternalServerError, "save failed", "could not commit credentials update")
 		return
 	}
+	markResponseAuditCommitted(w)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -438,7 +439,8 @@ func (s *Server) revealCreatorCredential(w http.ResponseWriter, r *http.Request)
 	credentialID := chi.URLParam(r, "credentialID")
 	p := r.Context().Value(principalKey).(principal)
 	var ciphertext, nonce []byte
-	err := s.pool.QueryRow(r.Context(), `SELECT x.value_ciphertext,x.value_nonce FROM creator_credentials x JOIN creators c ON c.id=x.creator_id WHERE x.id=$1 AND x.creator_id=$2 AND x.is_secret=true AND c.organization_id=$3`, credentialID, creatorID, p.OrganizationID).Scan(&ciphertext, &nonce)
+	var companyID string
+	err := s.pool.QueryRow(r.Context(), `SELECT x.value_ciphertext,x.value_nonce,c.company_id::text FROM creator_credentials x JOIN creators c ON c.id=x.creator_id WHERE x.id=$1 AND x.creator_id=$2 AND x.is_secret=true AND c.organization_id=$3`, credentialID, creatorID, p.OrganizationID).Scan(&ciphertext, &nonce, &companyID)
 	if err == pgx.ErrNoRows {
 		problem(w, http.StatusNotFound, "not found", "credential does not exist")
 		return
@@ -452,7 +454,11 @@ func (s *Server) revealCreatorCredential(w http.ResponseWriter, r *http.Request)
 		problem(w, http.StatusInternalServerError, "reveal failed", "could not decrypt credential")
 		return
 	}
-	_, _ = s.pool.Exec(r.Context(), `INSERT INTO audit_logs(organization_id,actor_id,action,entity_type,entity_id,metadata) VALUES($1,$2,'REVEAL_CREDENTIAL','CREATOR',$3,jsonb_build_object('credentialId',$4::text))`, p.OrganizationID, p.ID, creatorID, credentialID)
+	if err = s.writeAudit(r.Context(), s.pool, requestAuditRecord(r, p, &companyID, "REVEAL_CREDENTIAL", "CREATOR", &creatorID, http.StatusOK, map[string]any{"credentialId": credentialID})); err != nil {
+		problem(w, http.StatusInternalServerError, "reveal failed", "could not write reveal audit record")
+		return
+	}
+	markResponseAuditCommitted(w)
 	writeJSON(w, http.StatusOK, map[string]string{"value": string(plain)})
 }
 
@@ -534,7 +540,8 @@ func (s *Server) revealCreatorHistoryCredential(w http.ResponseWriter, r *http.R
 	p := r.Context().Value(principalKey).(principal)
 	var oldCiphertext, oldNonce, newCiphertext, newNonce []byte
 	var oldPresent, newPresent bool
-	err := s.pool.QueryRow(r.Context(), `SELECT c.old_value_ciphertext,c.old_value_nonce,c.new_value_ciphertext,c.new_value_nonce,c.old_present,c.new_present FROM creator_history_changes c JOIN creator_history_events e ON e.id=c.event_id WHERE c.id=$1 AND e.creator_id=$2 AND e.organization_id=$3 AND e.block='CREDENTIALS' AND c.is_secret=true`, changeID, creatorID, p.OrganizationID).Scan(&oldCiphertext, &oldNonce, &newCiphertext, &newNonce, &oldPresent, &newPresent)
+	var companyID string
+	err := s.pool.QueryRow(r.Context(), `SELECT c.old_value_ciphertext,c.old_value_nonce,c.new_value_ciphertext,c.new_value_nonce,c.old_present,c.new_present,creator.company_id::text FROM creator_history_changes c JOIN creator_history_events e ON e.id=c.event_id JOIN creators creator ON creator.id=e.creator_id AND creator.organization_id=e.organization_id WHERE c.id=$1 AND e.creator_id=$2 AND e.organization_id=$3 AND e.block='CREDENTIALS' AND c.is_secret=true`, changeID, creatorID, p.OrganizationID).Scan(&oldCiphertext, &oldNonce, &newCiphertext, &newNonce, &oldPresent, &newPresent, &companyID)
 	if err == pgx.ErrNoRows {
 		problem(w, http.StatusNotFound, "not found", "credential history value does not exist")
 		return
@@ -556,6 +563,10 @@ func (s *Server) revealCreatorHistoryCredential(w http.ResponseWriter, r *http.R
 		problem(w, http.StatusInternalServerError, "reveal failed", "could not decrypt credential history")
 		return
 	}
-	_, _ = s.pool.Exec(r.Context(), `INSERT INTO audit_logs(organization_id,actor_id,action,entity_type,entity_id,metadata) VALUES($1,$2,'REVEAL_CREDENTIAL_HISTORY','CREATOR',$3,jsonb_build_object('changeId',$4::text,'side',$5::text))`, p.OrganizationID, p.ID, creatorID, changeID, in.Side)
+	if err = s.writeAudit(r.Context(), s.pool, requestAuditRecord(r, p, &companyID, "REVEAL_CREDENTIAL_HISTORY", "CREATOR", &creatorID, http.StatusOK, map[string]any{"changeId": changeID, "side": in.Side})); err != nil {
+		problem(w, http.StatusInternalServerError, "reveal failed", "could not write reveal audit record")
+		return
+	}
+	markResponseAuditCommitted(w)
 	writeJSON(w, http.StatusOK, map[string]string{"value": string(plain)})
 }

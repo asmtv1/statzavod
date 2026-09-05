@@ -25,6 +25,14 @@
 .actions .vkSetup { color: #e8c879; background: rgb(229 184 106/.09); border: 1px solid rgb(229 184 106/.22); }
 .actions .vkReady { color: #bcefd0; background: rgb(156 229 189/.11); border: 1px solid rgb(156 229 189/.2); }
 .state,.error,.success { padding: 1.25rem; background: #202222; border: 1px solid var(--border); border-radius: 1rem; }
+.archiveList { display:grid; gap:.75rem; }
+.archiveList article { display:flex; align-items:center; justify-content:space-between; gap:1rem; padding:1.05rem 1.15rem; background:linear-gradient(145deg,#2a2d2d,#202222); border:1px solid var(--border); border-radius:1rem; box-shadow:var(--shadow); }
+.archiveInfo { min-width:0; }
+.archiveInfo h2,.archiveInfo p { margin:0; }
+.archiveInfo h2 { font-size:1rem; }
+.archiveInfo p,.archiveInfo span { display:block; margin-top:.3rem; color:var(--muted); font-size:.78rem; line-height:1.4; }
+.archiveInfo span { color:#e8c879; }
+.restore { flex:none; padding:.6rem .75rem; border:1px solid rgb(156 229 189 / 25%); border-radius:.5rem; background:rgb(156 229 189 / 10%); color:#bcefd0; font:inherit; font-size:.78rem; font-weight:700; cursor:pointer; }
 .error { color: #ff9b8f; }
 .success { color: #bcefd0; }
 .backdrop { position: fixed; inset: 0; z-index: 10; display: grid; place-items: center; padding: 1rem; background: rgb(6 7 7/.7); backdrop-filter: blur(8px); }
@@ -64,4 +72,4 @@
 .passwordField button { flex: none; color: #e8c879; padding: .62rem .7rem; border: 1px solid rgb(229 184 106/.22); border-radius: .45rem; }
 .dialog footer .saveVK { color: #211e1a; padding: .6rem .8rem; background: linear-gradient(135deg,#e4b667,#c98454); border-radius: .48rem; font-weight: 750; }
 @media (max-width:900px) { .page { gap: 1.25rem; } .create { grid-template-columns: 1fr; align-items: stretch; } .create > button { width: 100%; } .grid { grid-template-columns: 1fr; } }
-@media (max-width:620px) { .grid article { grid-template-columns: 2.7rem minmax(0,1fr); column-gap: .8rem; padding: 1rem; } .mark { width: 2.7rem; height: 2.7rem; border-radius: .7rem; } .actions { align-items: stretch; flex-direction: column; gap: .45rem; } .actions .vkSetup,.actions .vkReady { width: 100%; } .archive { padding: .5rem 0; } .passwordField { align-items: stretch; flex-direction: column; } }
+@media (max-width:620px) { .grid article { grid-template-columns: 2.7rem minmax(0,1fr); column-gap: .8rem; padding: 1rem; } .mark { width: 2.7rem; height: 2.7rem; border-radius: .7rem; } .actions { align-items: stretch; flex-direction: column; gap: .45rem; } .actions .vkSetup,.actions .vkReady { width: 100%; } .archive { padding: .5rem 0; } .passwordField { align-items: stretch; flex-direction: column; } .archiveList article { align-items:stretch; flex-direction:column; } .archiveList .restore { width:100%; } }

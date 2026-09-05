@@ -1,8 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { api, type CreatorDetail, type CreatorHistoryBlock, type CreatorHistoryChange, type CreatorStatus, type CreatorWorkStatus, type InstagramAccountCandidate, type Platform, type PlatformConnection } from '../../shared/api/client'
 import { useI18n } from '../../shared/i18n/I18nProvider'
+import { useAccess } from '../../shared/access/AccessProvider'
+import { useDialogFocus } from '../../shared/ui/dialogFocus'
+import { canManageContentApprovalPolicy, publishingErrorMessage, useContentApprovalPolicy, useSaveContentApprovalPolicy } from '../publishing/hooks/publishing'
 import styles from './CreatorDetailPage.module.scss'
 import statusStyles from './CreatorStatus.module.scss'
 
@@ -110,14 +113,21 @@ function historyFieldLabel(block: CreatorHistoryBlock, change: CreatorHistoryCha
 
 function CompanyVKAccess({ creatorID }: { creatorID: string }) {
   const { locale, t } = useI18n()
+  const { scopeKey, hasCapability, contextError } = useAccess()
+  const canEdit = hasCapability('CREDENTIAL_EDIT')
+  const canReveal = hasCapability('SECRET_REVEAL')
   const client = useQueryClient()
-  const accounts = useQuery({ queryKey: ['company-vk-accounts', locale], queryFn: api.companyVkAccounts })
-  const access = useQuery({ queryKey: ['creator-vk-access', creatorID, locale], queryFn: () => api.creatorVkAccess(creatorID) })
+  const accounts = useQuery({ queryKey: ['company-vk-accounts', scopeKey, locale], queryFn: api.companyVkAccounts })
+  const access = useQuery({ queryKey: ['creator-vk-access', creatorID, scopeKey, locale], queryFn: () => api.creatorVkAccess(creatorID) })
   const [editing, setEditing] = useState(false)
   const [accountID, setAccountID] = useState('')
   const [communityURL, setCommunityURL] = useState('')
   const [recipientAccountURL, setRecipientAccountURL] = useState('')
   const [password, setPassword] = useState('')
+  useEffect(() => {
+    if (!canEdit || contextError) setEditing(false)
+    if (!canReveal || contextError) setPassword('')
+  }, [canEdit, canReveal, contextError])
   useEffect(() => {
     setAccountID(access.data?.accountId ?? '')
     setCommunityURL(access.data?.communityUrl ?? '')
@@ -146,7 +156,7 @@ function CompanyVKAccess({ creatorID }: { creatorID: string }) {
     setEditing(false)
   }
   return <article className={`${styles.credentialSection} ${styles.companyVKSection}`}>
-    <div className={styles.credentialTitle}><h3>VK</h3><span>{t('Общий аккаунт фирмы')}</span>{!editing ? <button type="button" className={styles.vkEditButton} onClick={() => setEditing(true)}>{t('Изменить')}</button> : null}</div>
+    <div className={styles.credentialTitle}><h3>VK</h3><span>{t('Общий аккаунт фирмы')}</span>{!editing && canEdit ? <button type="button" className={styles.vkEditButton} onClick={() => setEditing(true)}>{t('Изменить')}</button> : null}</div>
     {access.isPending || accounts.isPending ? <p className={styles.vkEmpty}>{t('Загружаем корпоративный доступ…')}</p> : access.isError || accounts.isError ? <p className={styles.error}>{t('Не удалось загрузить VK-доступ.')}</p> : editing ? <div className={styles.credentialRows}>
       <label className={styles.credentialRow}><span>{t('Аккаунт фирмы')}</span><select value={accountID} onChange={event => { setAccountID(event.target.value); if (!event.target.value) { setCommunityURL(''); setRecipientAccountURL('') } }}><option value="">{t('Не выбран')}</option>{accounts.data.items.map(account => <option value={account.id} key={account.id}>{account.companyName} · {account.accessMethod === 'PHONE' ? account.phone : account.login}</option>)}</select></label>
       <label className={styles.credentialRow}><span>{t('Сообщество')}</span><input type="url" required={Boolean(accountID)} disabled={!accountID} value={communityURL} onChange={event => setCommunityURL(event.target.value)} placeholder="https://vk.ru/club240646151" /></label>
@@ -156,7 +166,7 @@ function CompanyVKAccess({ creatorID }: { creatorID: string }) {
       {save.isError ? <p className={styles.error}>{t(save.error.message)}</p> : null}
     </div> : access.data.accountId ? <div className={styles.credentialRows}>
       <div className={styles.credentialRow}><span>{t('Аккаунт фирмы')}</span><div className={styles.credentialValue}><strong>{access.data.companyName}</strong></div></div>
-      {access.data.accessMethod === 'LOGIN' ? <><div className={styles.credentialRow}><span>{t('Логин')}</span><div className={styles.credentialValue}><strong>{access.data.login}</strong></div></div><div className={styles.credentialRow}><span>{t('Пароль')}</span><div className={styles.credentialValue}><strong>{password || '••••••••••••'}</strong>{password ? <button type="button" onClick={() => setPassword('')}>{t('Скрыть')}</button> : <button type="button" onClick={() => reveal.mutate()} disabled={reveal.isPending}>{reveal.isPending ? t('Открываем…') : t('Показать')}</button>}</div></div></> : <div className={styles.credentialRow}><span>{t('Способ входа')}</span><div className={styles.credentialValue}><strong>{t('По номеру телефона')}</strong></div></div>}
+      {access.data.accessMethod === 'LOGIN' ? <><div className={styles.credentialRow}><span>{t('Логин')}</span><div className={styles.credentialValue}><strong>{access.data.login}</strong></div></div><div className={styles.credentialRow}><span>{t('Пароль')}</span><div className={styles.credentialValue}><strong>{password || '••••••••••••'}</strong>{canReveal ? password ? <button type="button" onClick={() => setPassword('')}>{t('Скрыть')}</button> : <button type="button" onClick={() => reveal.mutate()} disabled={reveal.isPending}>{reveal.isPending ? t('Открываем…') : t('Показать')}</button> : null}</div></div></> : <div className={styles.credentialRow}><span>{t('Способ входа')}</span><div className={styles.credentialValue}><strong>{t('По номеру телефона')}</strong></div></div>}
       <div className={styles.credentialRow}><span>{t('Телефон')}</span><div className={styles.credentialValue}><strong className={access.data.phone ? '' : styles.missing}>{access.data.phone || '—'}</strong></div></div>
       <div className={styles.credentialRow}><span>{t('Сообщество')}</span><div className={styles.credentialValue}><a className={styles.vkCommunityLink} href={access.data.communityUrl} target="_blank" rel="noreferrer">{access.data.communityUrl} ↗</a></div></div>
       <div className={styles.credentialRow}><span>{t('Аккаунт, которому выдан доступ')}</span><div className={styles.credentialValue}>{access.data.recipientAccountUrl ? <a className={styles.vkCommunityLink} href={access.data.recipientAccountUrl} target="_blank" rel="noreferrer">{access.data.recipientAccountUrl} ↗</a> : <strong className={styles.missing}>—</strong>}</div></div>
@@ -175,12 +185,15 @@ function formatHistoryValue(block: CreatorHistoryBlock, change: CreatorHistoryCh
 
 function CreatorHistory({ creatorID, block }: { creatorID: string; block: CreatorHistoryBlock }) {
   const { locale, t } = useI18n()
+  const { scopeKey, hasCapability, contextError } = useAccess()
+  const canReveal = hasCapability('SECRET_REVEAL')
   const historyDateFormatter = new Intl.DateTimeFormat(locale === 'en' ? 'en-US' : 'ru-RU', { dateStyle: 'medium', timeStyle: 'short' })
   const historyValueDateFormatter = new Intl.DateTimeFormat(locale === 'en' ? 'en-US' : 'ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
   const [open, setOpen] = useState(false)
   const [revealed, setRevealed] = useState<Record<string, string>>({})
+  const dialogRef = useRef<HTMLDivElement>(null)
   const history = useQuery({
-    queryKey: ['creator-history', creatorID, block, locale],
+    queryKey: ['creator-history', creatorID, block, scopeKey, locale],
     queryFn: () => api.creatorHistory(creatorID, block),
     enabled: open,
   })
@@ -192,6 +205,10 @@ function CreatorHistory({ creatorID, block }: { creatorID: string; block: Creato
     setOpen(false)
     setRevealed({})
   }
+  useDialogFocus(open, dialogRef, close)
+  useEffect(() => {
+    if (!canReveal || contextError) setRevealed({})
+  }, [canReveal, contextError])
   const renderValue = (change: CreatorHistoryChange, side: 'old'|'new') => {
     const present = side === 'old' ? change.oldPresent : change.newPresent
     if (!present) return <span className={styles.historyEmpty}>{t('Не заполнено')}</span>
@@ -200,19 +217,19 @@ function CreatorHistory({ creatorID, block }: { creatorID: string; block: Creato
       return <strong>{value || t('Не заполнено')}</strong>
     }
     const key = `${change.id}:${side}`
-    const value = revealed[key]
+    const value = canReveal ? revealed[key] : undefined
     return <div className={styles.historySecret}>
       <strong>{value ?? '••••••••••••'}</strong>
-      {value === undefined
+      {canReveal ? value === undefined
         ? <button type="button" onClick={() => reveal.mutate({ changeID: change.id, side, key })} disabled={reveal.isPending}>{t('Показать')}</button>
-        : <button type="button" onClick={() => navigator.clipboard.writeText(value)}>{t('Скопировать')}</button>}
+        : <button type="button" onClick={() => navigator.clipboard.writeText(value)}>{t('Скопировать')}</button> : null}
     </div>
   }
 
   return <>
     <button type="button" className={styles.historyButton} onClick={() => setOpen(true)}>{t('История')}</button>
     {open ? <div className={styles.historyBackdrop} role="presentation" onMouseDown={close}>
-      <div className={styles.historyDialog} role="dialog" aria-modal="true" aria-label={t(historyBlockTitles[block])} onMouseDown={event => event.stopPropagation()}>
+      <div ref={dialogRef} className={styles.historyDialog} role="dialog" aria-modal="true" aria-label={t(historyBlockTitles[block])} tabIndex={-1} onMouseDown={event => event.stopPropagation()}>
         <header><div><span>{t('АРХИВ ИЗМЕНЕНИЙ')}</span><h2>{t(historyBlockTitles[block])}</h2></div><button type="button" aria-label={t('Закрыть историю')} onClick={close}>×</button></header>
         <div className={styles.historyBody}>
           {history.isPending ? <p className={styles.empty}>{t('Загружаем историю…')}</p> : history.isError ? <p className={styles.error}>{t('Не удалось загрузить историю:')} {t(history.error.message)}</p> : history.data.items.length === 0 ? <div className={styles.historyBlank}><strong>{t('Изменений пока нет')}</strong><p>{t('Здесь появятся прежние и новые значения после следующего редактирования.')}</p></div> : history.data.items.map(event => <article className={styles.historyEvent} key={event.id}>
@@ -230,9 +247,10 @@ function CreatorHistory({ creatorID, block }: { creatorID: string; block: Creato
 }
 
 function CreatorProfile({ creator, creatorID }: { creator: CreatorDetail; creatorID: string }) {
-  const { locale, t } = useI18n()
+  const { t } = useI18n()
+  const { hasCapability } = useAccess()
+  const canEdit = hasCapability('CREATOR_EDIT')
   const client = useQueryClient()
-  const companies = useQuery({ queryKey: ['companies', locale], queryFn: api.companies })
   const [editing, setEditing] = useState(false)
   const [form, setForm] = useState({
     firstName: creator.firstName,
@@ -256,6 +274,9 @@ function CreatorProfile({ creator, creatorID }: { creator: CreatorDetail; creato
       companyId: creator.companyId,
     })
   }, [creator])
+  useEffect(() => {
+    if (!canEdit) setEditing(false)
+  }, [canEdit])
   const update = useMutation({
     mutationFn: () => api.updateCreator(creatorID, form),
     onSuccess: async () => {
@@ -272,7 +293,7 @@ function CreatorProfile({ creator, creatorID }: { creator: CreatorDetail; creato
   return <section className={styles.profile}>
     <div className={styles.sectionHead}>
       <div><h2>{t('Профиль креатора')}</h2><p>{t('Основные данные и быстрые контакты.')}</p></div>
-      <div className={styles.inlineActions}><CreatorHistory creatorID={creatorID} block="PROFILE"/>{!editing ? <button className={styles.secondaryButton} onClick={() => setEditing(true)}>{t('Редактировать')}</button> : null}</div>
+      <div className={styles.inlineActions}><CreatorHistory creatorID={creatorID} block="PROFILE"/>{!editing && canEdit ? <button className={styles.secondaryButton} onClick={() => setEditing(true)}>{t('Редактировать')}</button> : null}</div>
     </div>
     {editing ? <form className={styles.profileForm} onSubmit={(event) => { event.preventDefault(); update.mutate() }}>
       <label>{t('Имя')}<input required value={form.firstName} onChange={(event) => setForm({ ...form, firstName: event.target.value })}/></label>
@@ -280,7 +301,7 @@ function CreatorProfile({ creator, creatorID }: { creator: CreatorDetail; creato
       <label>{t('Отчество')}<input value={form.middleName} onChange={(event) => setForm({ ...form, middleName: event.target.value })}/></label>
       <label>{t('Отображаемое имя')}<input value={form.displayName} onChange={(event) => setForm({ ...form, displayName: event.target.value })}/></label>
       <label>{t('Статус')}<select className={statusStyles.select} value={form.status} onChange={(event) => setForm({ ...form, status: event.target.value as CreatorStatus })}><option value="ACTIVE">{t('Активен')}</option><option value="ON_LEAVE">{t('В отпуске')}</option><option value="DISMISSED">{t('Уволен')}</option></select></label>
-      <label>{t('Компания')}<select className={statusStyles.select} value={form.companyId} onChange={(event) => setForm({ ...form, companyId: event.target.value })}><option value="">{t('Без компании')}</option>{companies.data?.items.map(company => <option value={company.id} key={company.id}>{company.name}</option>)}</select></label>
+      <label>{t('Компания')}<input value={creator.companyName} readOnly/></label>
       <label className={styles.wideField}>Telegram<input placeholder="@username or t.me/username" value={form.telegramUsername} onChange={(event) => setForm({ ...form, telegramUsername: event.target.value })}/></label>
       <label className={styles.wideField}>{t('Внутренний комментарий')}<textarea rows={3} value={form.internalNote} onChange={(event) => setForm({ ...form, internalNote: event.target.value })}/></label>
       {update.isError && <p className={styles.error}>{t(update.error.message)}</p>}
@@ -297,6 +318,8 @@ function CreatorProfile({ creator, creatorID }: { creator: CreatorDetail; creato
 
 function CreatorWork({ creator, creatorID }: { creator: CreatorDetail; creatorID: string }) {
   const { t } = useI18n()
+  const { hasCapability } = useAccess()
+  const canEdit = hasCapability('CREATOR_EDIT')
   const client = useQueryClient()
   const [editing, setEditing] = useState(false)
   const [status, setStatus] = useState<CreatorWorkStatus>(creator.workStatus)
@@ -305,6 +328,9 @@ function CreatorWork({ creator, creatorID }: { creator: CreatorDetail; creatorID
     setStatus(creator.workStatus)
     setComment(creator.workComment)
   }, [creator.workStatus, creator.workComment])
+  useEffect(() => {
+    if (!canEdit) setEditing(false)
+  }, [canEdit])
   const update = useMutation({
     mutationFn: () => api.updateCreatorWorkStatus(creatorID, status, comment),
     onSuccess: async () => {
@@ -324,7 +350,7 @@ function CreatorWork({ creator, creatorID }: { creator: CreatorDetail; creatorID
   return <section className={styles.workPanel}>
     <div className={styles.sectionHead}>
       <div><h2>{t('Работы по креатору')}</h2><p>{t('Текущее состояние карточки и задачи, которые требуют внимания.')}</p></div>
-      <div className={styles.inlineActions}><CreatorHistory creatorID={creatorID} block="WORK"/>{!editing ? <button className={styles.secondaryButton} onClick={() => setEditing(true)}>{t('Редактировать')}</button> : null}</div>
+      <div className={styles.inlineActions}><CreatorHistory creatorID={creatorID} block="WORK"/>{!editing && canEdit ? <button className={styles.secondaryButton} onClick={() => setEditing(true)}>{t('Редактировать')}</button> : null}</div>
     </div>
     {editing ? <form className={styles.workForm} onSubmit={event => { event.preventDefault(); update.mutate() }}>
       <label>{t('Состояние')}<select className={statusStyles.select} value={status} onChange={event => { const next = event.target.value as CreatorWorkStatus; setStatus(next); if (next === 'OK') setComment('') }}><option value="OK">{t('Всё ок')}</option><option value="NEEDS_ATTENTION">{t('Нужны работы')}</option><option value="IN_PROGRESS">{t('В работе')}</option></select></label>
@@ -340,12 +366,20 @@ function CreatorWork({ creator, creatorID }: { creator: CreatorDetail; creatorID
 
 function CredentialVault({ creatorID }: { creatorID: string }) {
   const { locale, t } = useI18n()
+  const { scopeKey, hasCapability, contextError } = useAccess()
+  const canEdit = hasCapability('CREDENTIAL_EDIT')
+  const canReveal = hasCapability('SECRET_REVEAL')
   const client = useQueryClient()
-  const credentials = useQuery({ queryKey: ['creator-credentials', creatorID, locale], queryFn: () => api.creatorCredentials(creatorID) })
+  const credentials = useQuery({ queryKey: ['creator-credentials', creatorID, scopeKey, locale], queryFn: () => api.creatorCredentials(creatorID) })
   const [editing, setEditing] = useState(false)
   const [values, setValues] = useState<Record<string, string>>({})
   const [revealed, setRevealed] = useState<Record<string, string>>({})
   const itemMap = useMemo(() => new Map(credentials.data?.items.map(item => [credentialKey(item.section, item.fieldKey), item])), [credentials.data])
+
+  useEffect(() => {
+    if (!canEdit || contextError) setEditing(false)
+    if (!canReveal || contextError) setRevealed({})
+  }, [canEdit, canReveal, contextError])
 
   useEffect(() => {
     const next: Record<string, string> = {}
@@ -379,7 +413,7 @@ function CredentialVault({ creatorID }: { creatorID: string }) {
   return <section className={styles.credentials}>
     <div className={styles.sectionHead}>
       <div><h2>{t('Доступы и аккаунты')}</h2><p>{t('Данные из рабочей таблицы. Секреты зашифрованы и раскрываются только администратору.')}</p></div>
-      <div className={styles.inlineActions}><CreatorHistory creatorID={creatorID} block="CREDENTIALS"/>{!editing ? <button className={styles.secondaryButton} onClick={() => setEditing(true)}>{t('Редактировать доступы')}</button> : <><button className={styles.ghostButton} onClick={() => setEditing(false)}>{t('Отмена')}</button><button className={styles.primaryButton} onClick={() => save.mutate()} disabled={save.isPending}>{save.isPending ? t('Сохраняем…') : t('Сохранить')}</button></>}</div>
+      <div className={styles.inlineActions}><CreatorHistory creatorID={creatorID} block="CREDENTIALS"/>{!editing && canEdit ? <button className={styles.secondaryButton} onClick={() => setEditing(true)}>{t('Редактировать доступы')}</button> : editing ? <><button className={styles.ghostButton} onClick={() => setEditing(false)}>{t('Отмена')}</button><button className={styles.primaryButton} onClick={() => save.mutate()} disabled={save.isPending}>{save.isPending ? t('Сохраняем…') : t('Сохранить')}</button></> : null}</div>
     </div>
     {credentials.isPending ? <p className={styles.empty}>{t('Загружаем доступы…')}</p> : credentials.isError ? <p className={styles.error}>{t(credentials.error.message)}</p> : <div className={styles.credentialSections}>
       {credentialSections.filter(section => !section.legacy || section.fields.some(field => itemMap.get(credentialKey(section.id, field.key))?.hasValue)).map(section => <article className={`${styles.credentialSection} ${section.legacy ? styles.legacyCredentialSection : ''}`} key={section.id}>
@@ -391,7 +425,7 @@ function CredentialVault({ creatorID }: { creatorID: string }) {
           const channelURL = field.channelLink ? shownValue || defaultChannelURL(section.id, values[credentialKey(section.id, 'login')]) : ''
           return <div className={styles.credentialRow} key={field.key}>
             <span>{t(field.label)}</span>
-            {editing ? <input type={field.secret ? 'password' : field.channelLink ? 'url' : 'text'} name={`creator-credential-${section.id.toLowerCase()}-${field.key}`} autoComplete={field.secret ? 'new-password' : 'off'} data-lpignore="true" data-1p-ignore="true" spellCheck={false} value={values[key] ?? ''} placeholder={field.channelLink ? defaultChannelURL(section.id, values[credentialKey(section.id, 'login')]) || 'https://...' : field.secret && item?.hasValue ? t('Сохранено — введите для замены') : t('Не заполнено')} onChange={(event) => setValues(current => ({ ...current, [key]: event.target.value }))}/> : <div className={styles.credentialValue}>{field.channelLink && channelURL ? <a className={styles.channelLink} href={channelURL} target="_blank" rel="noreferrer">{channelURL} ↗</a> : <strong className={!item?.hasValue ? styles.missing : ''}>{shownValue || (item?.hasValue ? '••••••••••••' : '—')}</strong>}{field.secret && item?.id && !revealed[key] && <button onClick={() => reveal.mutate({ id: item.id, key })} disabled={reveal.isPending}>{t('Показать')}</button>}{field.secret && revealed[key] && <button onClick={() => setRevealed(current => { const next = { ...current }; delete next[key]; return next })}>{t('Скрыть')}</button>}</div>}
+            {editing ? <input type={field.secret ? 'password' : field.channelLink ? 'url' : 'text'} name={`creator-credential-${section.id.toLowerCase()}-${field.key}`} autoComplete={field.secret ? 'new-password' : 'off'} data-lpignore="true" data-1p-ignore="true" spellCheck={false} value={values[key] ?? ''} placeholder={field.channelLink ? defaultChannelURL(section.id, values[credentialKey(section.id, 'login')]) || 'https://...' : field.secret && item?.hasValue ? t('Сохранено — введите для замены') : t('Не заполнено')} onChange={(event) => setValues(current => ({ ...current, [key]: event.target.value }))}/> : <div className={styles.credentialValue}>{field.channelLink && channelURL ? <a className={styles.channelLink} href={channelURL} target="_blank" rel="noreferrer">{channelURL} ↗</a> : <strong className={!item?.hasValue ? styles.missing : ''}>{shownValue || (item?.hasValue ? '••••••••••••' : '—')}</strong>}{canReveal && field.secret && item?.id && !revealed[key] && <button onClick={() => reveal.mutate({ id: item.id, key })} disabled={reveal.isPending}>{t('Показать')}</button>}{canReveal && field.secret && revealed[key] && <button onClick={() => setRevealed(current => { const next = { ...current }; delete next[key]; return next })}>{t('Скрыть')}</button>}</div>}
           </div>
         })}</div>
       </article>)}
@@ -414,10 +448,12 @@ function InstagramAccountSelector({ items, selected, loading, saving, error, onT
   onRestart: () => void
 }) {
   const { t } = useI18n()
+  const dialogRef = useRef<HTMLDivElement>(null)
+  useDialogFocus(true, dialogRef, () => { if (!saving) onCancel() })
   const selectableCount = items.filter(item => item.selectable).length
   const allSelected = selectableCount > 0 && selected.size === selectableCount
   return <div className={styles.accountSelectorBackdrop} role="presentation">
-    <div className={styles.accountSelector} role="dialog" aria-modal="true" aria-labelledby="instagram-account-selector-title">
+    <div ref={dialogRef} className={styles.accountSelector} role="dialog" aria-modal="true" aria-labelledby="instagram-account-selector-title" tabIndex={-1}>
       <header><div><span>INSTAGRAM · FACEBOOK</span><h2 id="instagram-account-selector-title">{t('Добавьте аккаунты')}</h2><p>{t('Мы нашли профессиональные Instagram-аккаунты, связанные с доступными вам Facebook Pages.')}</p></div><button type="button" aria-label={t('Закрыть')} onClick={onCancel} disabled={saving}>×</button></header>
       <div className={styles.accountSelectorBody}>
         <div className={styles.accountSelectorSummary}><div><b>{t('Выберите аккаунты')}</b><span>{t('Выбрано:')} {selected.size} {t('из')} {selectableCount}</span></div>{selectableCount ? <button type="button" onClick={onSelectAll} disabled={saving}>{allSelected ? t('Снять выбор') : t('Выбрать всех')}</button> : null}</div>
@@ -445,21 +481,22 @@ function InstagramAccountSelector({ items, selected, loading, saving, error, onT
 
 function PlatformConnections({ creatorID }: { creatorID: string }) {
   const { locale, t } = useI18n()
+  const { scopeKey, hasCapability, contextError } = useAccess()
   const queryClient = useQueryClient()
   const [params, setParams] = useSearchParams()
   const [showConnectedToast, setShowConnectedToast] = useState(false)
   const [disconnectedPlatform, setDisconnectedPlatform] = useState<Platform | null>(null)
   const [pendingDisconnect, setPendingDisconnect] = useState<PlatformConnection | null>(null)
+  const disconnectDialogRef = useRef<HTMLDivElement>(null)
   const [disconnectError, setDisconnectError] = useState('')
   const [syncFeedback, setSyncFeedback] = useState<Record<string, { status: 'QUEUED'|'SUCCESS'|'ERROR'; lastSyncedAt: string|null; consecutiveFailures: number; requestedAt: number; message?: string }>>({})
   const [syncPollTick, setSyncPollTick] = useState(0)
   const [selectedInstagramAccounts, setSelectedInstagramAccounts] = useState<Set<string>>(new Set())
   const hasPendingSync = Object.values(syncFeedback).some(item => item.status === 'QUEUED')
-  const me = useQuery({ queryKey: ['me'], queryFn: api.me })
-  const connections = useQuery({ queryKey: ['platform-connections', creatorID, locale], queryFn: () => api.connections(creatorID), refetchInterval: hasPendingSync ? 3_000 : 30_000 })
-  const vkAccess = useQuery({ queryKey: ['creator-vk-access', creatorID, locale], queryFn: () => api.creatorVkAccess(creatorID), refetchInterval: 30_000 })
-  const companyVKAccounts = useQuery({ queryKey: ['company-vk-accounts', locale], queryFn: api.companyVkAccounts, refetchInterval: hasPendingSync ? 3_000 : 30_000 })
-  const integrations = useQuery({ queryKey: ['integrations', locale], queryFn: api.integrations })
+  const connections = useQuery({ queryKey: ['platform-connections', creatorID, scopeKey, locale], queryFn: () => api.connections(creatorID), refetchInterval: hasPendingSync ? 3_000 : 30_000 })
+  const vkAccess = useQuery({ queryKey: ['creator-vk-access', creatorID, scopeKey, locale], queryFn: () => api.creatorVkAccess(creatorID), refetchInterval: 30_000 })
+  const companyVKAccounts = useQuery({ queryKey: ['company-vk-accounts', scopeKey, locale], queryFn: api.companyVkAccounts, refetchInterval: hasPendingSync ? 3_000 : 30_000 })
+  const integrations = useQuery({ queryKey: ['integrations', scopeKey, locale], queryFn: api.integrations })
   const authorize = useMutation({
     mutationFn: (platform: string) => api.startAuthorization(creatorID, platform),
     onSuccess: ({ authorizationUrl }) => window.location.assign(authorizationUrl),
@@ -506,7 +543,7 @@ function PlatformConnections({ creatorID }: { creatorID: string }) {
   const result = params.get('oauth')
   const selectionID = result === 'select' ? params.get('selection') ?? '' : ''
   const instagramSelection = useQuery({
-    queryKey: ['instagram-account-selection', creatorID, selectionID, locale],
+    queryKey: ['instagram-account-selection', creatorID, selectionID, scopeKey, locale],
     queryFn: () => api.instagramAccountSelection(creatorID, selectionID),
     enabled: Boolean(selectionID),
     retry: false,
@@ -514,7 +551,18 @@ function PlatformConnections({ creatorID }: { creatorID: string }) {
     refetchOnWindowFocus: false,
   })
   const configured = new Map(integrations.data?.items.map(item => [item.id, item.configured]))
-  const canDisconnect = me.data?.role === 'ADMIN' || me.data?.role === 'ANALYST'
+  const canConnect = hasCapability('SOCIAL_CONNECT')
+  const canSync = hasCapability('SYNC_MANAGE')
+  const closeDisconnect = () => { if (!disconnect.isPending) { setPendingDisconnect(null); setDisconnectError('') } }
+  useDialogFocus(Boolean(pendingDisconnect) && canConnect, disconnectDialogRef, closeDisconnect)
+  useEffect(() => {
+    if (!canConnect || contextError) {
+      setPendingDisconnect(null)
+      setSelectedInstagramAccounts(new Set())
+      setDisconnectError('')
+    }
+    if (!canSync || contextError) setSyncFeedback({})
+  }, [canConnect, canSync, contextError])
   const assignedVKAccount = companyVKAccounts.data?.items.find(account => account.id === vkAccess.data?.accountId)
   const vkConnection: PlatformConnection | null = assignedVKAccount?.platformAccountId && assignedVKAccount.oauthStatus === 'ACTIVE' ? {
     id: assignedVKAccount.platformAccountId,
@@ -613,7 +661,7 @@ function PlatformConnections({ creatorID }: { creatorID: string }) {
       const isConfigured = configured.get(platform.id)
       return <article className={styles.platformCard} key={platform.id}>
         <div><b>{platform.name}</b><span>{t(platform.hint)}</span><small>{platformConnections.length ? `${t('Аккаунтов:')} ${platformConnections.length}` : isConfigured === false ? t('Нужны OAuth-реквизиты') : t('Нет подключений')}</small></div>
-        <div><button onClick={() => authorize.mutate(platform.id)} disabled={authorize.isPending || integrations.isPending || isConfigured === false}>{authorize.isPending && authorize.variables === platform.id ? t('Переходим…') : t('Подключить')}</button>{platform.id === 'INSTAGRAM' ? <button onClick={() => authorize.mutate('instagram-facebook')} disabled={authorize.isPending || integrations.isPending} title={t('Нужна Facebook Page, связанная с профессиональным Instagram')}>{t('Через Facebook · коллаборации')}</button> : null}</div>
+        {canConnect ? <div><button onClick={() => authorize.mutate(platform.id)} disabled={authorize.isPending || integrations.isPending || isConfigured === false}>{authorize.isPending && authorize.variables === platform.id ? t('Переходим…') : t('Подключить')}</button>{platform.id === 'INSTAGRAM' ? <button onClick={() => authorize.mutate('instagram-facebook')} disabled={authorize.isPending || integrations.isPending} title={t('Нужна Facebook Page, связанная с профессиональным Instagram')}>{t('Через Facebook · коллаборации')}</button> : null}</div> : null}
       </article>
     })}</div>
     {connectionsPending ? <p>{t('Загружаем подключения…')}</p> : visibleConnections.length ? <div className={styles.connectionList}>{visibleConnections.map(connection => {
@@ -624,20 +672,20 @@ function PlatformConnections({ creatorID }: { creatorID: string }) {
       <div>{connection.avatarUrl ? <img src={connection.avatarUrl} alt="" /> : null}<div><b>{connection.displayName}{connection.isVerified ? ' ✓' : ''}</b><span>{connection.platform} · @{connection.username} · {connectionStatus(connection.status, t)}</span>{connection.bioDescription ? <small>{connection.bioDescription}</small> : null}<small>{connectionPermissions(connection.platform, connection.scopes, t)}{connection.lastSyncedAt ? ` · ${t('синхронизация')} ${new Date(connection.lastSyncedAt).toLocaleString(locale === 'en' ? 'en-US' : 'ru-RU')}` : ''}</small></div></div>
       <div className={styles.connectionActions}>
         {connection.profileUrl ? <a href={connection.profileUrl} target="_blank" rel="noreferrer">{t('Открыть')}</a> : null}
-        <button type="button" className={feedback?.status === 'SUCCESS' ? styles.syncComplete : ''} onClick={() => sync.mutate(connection)} disabled={isQueuing || feedback?.status === 'QUEUED'}>{syncLabel}</button>
-        {canDisconnect && connection.platform !== 'VK' ? <button type="button" className={styles.danger} onClick={() => { setDisconnectError(''); setPendingDisconnect(connection) }} disabled={disconnect.isPending}>{t('Отвязать аккаунт')}</button> : null}
+        {canSync ? <button type="button" className={feedback?.status === 'SUCCESS' ? styles.syncComplete : ''} onClick={() => sync.mutate(connection)} disabled={isQueuing || feedback?.status === 'QUEUED'}>{syncLabel}</button> : null}
+        {canConnect && connection.platform !== 'VK' ? <button type="button" className={styles.danger} onClick={() => { setDisconnectError(''); setPendingDisconnect(connection) }} disabled={disconnect.isPending}>{t('Отвязать аккаунт')}</button> : null}
         {feedback?.status === 'ERROR' ? <span className={styles.connectionSyncError}>{feedback.message}</span> : null}
       </div>
     </article>})}</div> : <p className={styles.empty}>{t('Аккаунты ещё не подключены.')}</p>}
-    {pendingDisconnect ? <div className={styles.dialogBackdrop} role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !disconnect.isPending) { setPendingDisconnect(null); setDisconnectError('') } }}>
-      <div className={styles.confirmDialog} role="dialog" aria-modal="true" aria-labelledby="disconnect-account-title">
+    {pendingDisconnect && canConnect ? <div className={styles.dialogBackdrop} role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) closeDisconnect() }}>
+      <div ref={disconnectDialogRef} className={styles.confirmDialog} role="dialog" aria-modal="true" aria-labelledby="disconnect-account-title" tabIndex={-1}>
         <div><span className={styles.dialogMark}>!</span><div><h3 id="disconnect-account-title">{t('Отвязать аккаунт?')}</h3><p><b>{pendingDisconnect.displayName}</b> · {pendingDisconnect.platform}</p></div></div>
         <p>{t('Доступ платформы будет отозван, а новые синхронизации остановятся. Уже собранные публикации и метрики сохранятся.')}</p>
         {disconnectError ? <p className={styles.error}>{t(disconnectError)}</p> : null}
-        <div className={styles.dialogActions}><button type="button" onClick={() => { setPendingDisconnect(null); setDisconnectError('') }} disabled={disconnect.isPending}>{t('Отмена')}</button><button type="button" className={styles.confirmDanger} onClick={() => disconnect.mutate(pendingDisconnect)} disabled={disconnect.isPending}>{disconnect.isPending ? t('Отвязываем…') : t('Отвязать')}</button></div>
+        <div className={styles.dialogActions}><button type="button" onClick={closeDisconnect} disabled={disconnect.isPending}>{t('Отмена')}</button><button type="button" className={styles.confirmDanger} onClick={() => disconnect.mutate(pendingDisconnect)} disabled={disconnect.isPending}>{disconnect.isPending ? t('Отвязываем…') : t('Отвязать')}</button></div>
       </div>
     </div> : null}
-    {selectionID ? <InstagramAccountSelector
+    {selectionID && canConnect ? <InstagramAccountSelector
       items={instagramSelection.data?.items ?? []}
       selected={selectedInstagramAccounts}
       loading={instagramSelection.isPending}
@@ -654,16 +702,68 @@ function PlatformConnections({ creatorID }: { creatorID: string }) {
   </section>
 }
 
+function CreatorLoginAccess({creatorID}:{creatorID:string}){
+  const {locale,t}=useI18n()
+  const {scopeKey,role,hasCapability}=useAccess()
+  const client=useQueryClient()
+  const canManage=hasCapability('CREATOR_ACCOUNT_MANAGE')
+  const account=useQuery({queryKey:['creator-login-account',creatorID,scopeKey,locale],queryFn:()=>api.creatorLoginAccount(creatorID),enabled:canManage})
+  const [editing,setEditing]=useState(false)
+  const [email,setEmail]=useState('')
+  const [password,setPassword]=useState('')
+  useEffect(()=>{setEmail(account.data?.account?.email??'');setPassword('')},[account.data])
+  useEffect(() => {
+    if (!canManage) {
+      setEditing(false)
+      setEmail('')
+      setPassword('')
+    }
+  }, [canManage])
+  const save=useMutation({mutationFn:()=>api.putCreatorLoginAccount(creatorID,email,password||undefined),onSuccess:async result=>{await client.invalidateQueries({queryKey:['creator-login-account',creatorID]});setEditing(false);setPassword('');return result}})
+  if(!canManage)return null
+  return <section className={styles.profile}>
+    <div className={styles.sectionHead}><div><h2>{t('Аккаунт личного кабинета')}</h2><p>{t('Создайте новый вход или свяжите существующий аккаунт креатора по email.')}</p></div>{!editing?<button className={styles.secondaryButton} onClick={()=>setEditing(true)}>{account.data?.account?t('Управлять аккаунтом'):t('Подключить аккаунт')}</button>:null}</div>
+    {account.isPending?<p className={styles.empty}>{t('Загружаем аккаунт…')}</p>:account.isError?<p className={styles.error}>{t(account.error.message)}</p>:editing?<form className={styles.profileForm} onSubmit={event=>{event.preventDefault();save.mutate()}}><label className={styles.wideField}>Email<input type="email" required value={email} onChange={event=>setEmail(event.target.value)} readOnly={Boolean(account.data.account)}/></label>{!account.data.account||role==='OWNER'?<label className={styles.wideField}>{account.data.account?t('Новый общий пароль'):t('Начальный пароль')}<input type="password" minLength={12} required={!account.data.account} autoComplete="new-password" value={password} onChange={event=>setPassword(event.target.value)} placeholder={account.data.account?t('Оставьте пустым, чтобы не менять'):t('Не менее 12 символов')}/></label>:<p className={`${styles.notice} ${styles.wideField}`}>{t('Менеджер не может сбрасывать пароль существующего аккаунта.')}</p>}{save.isError?<p className={styles.error}>{t(save.error.message)}</p>:null}<div className={styles.formActions}><button type="button" className={styles.ghostButton} onClick={()=>{setEditing(false);setEmail(account.data.account?.email??'');setPassword('')}}>{t('Отмена')}</button><button className={styles.primaryButton} disabled={save.isPending||!email||(!account.data.account&&!password)}>{save.isPending?t('Сохраняем…'):account.data.account&&password?t('Сбросить пароль'):t('Связать аккаунт')}</button></div></form>:account.data.account?<div className={styles.profileSummary}><div><span>Email</span><strong>{account.data.account.email}</strong></div><div><span>{t('Статус')}</span><strong>{account.data.account.status==='ACTIVE'?t('Активен'):t('Заблокирован')}</strong></div></div>:<p className={styles.empty}>{t('Аккаунт для входа ещё не связан.')}</p>}
+  </section>
+}
+
+function ContentApprovalPolicyMatrix({ creatorID }: { creatorID: string }) {
+  const { t } = useI18n()
+  const { role, hasCapability } = useAccess()
+  const policy = useContentApprovalPolicy(creatorID)
+  const save = useSaveContentApprovalPolicy(creatorID)
+  const canManage = canManageContentApprovalPolicy(role, hasCapability('CONTENT_EDIT'))
+  if (!canManage) return null
+  if (policy.isPending) return <section className={styles.profile}><p className={styles.empty}>{t('Загружаем правила согласования…')}</p></section>
+  if (policy.isError) return <section className={styles.profile}><p className={styles.error}>{publishingErrorMessage(policy.error, t)}</p></section>
+  const value = policy.data
+  return <section className={`${styles.profile} ${styles.approvalPolicy}`}>
+    <div className={styles.sectionHead}><div><h2>{t('Согласование публикаций')}</h2><p>{t('Эти правила применяются только к действиям самого креатора. Действия менеджера и владельца определяются их правами.')}</p></div></div>
+    <div className={styles.policyRows}>
+      <label><input type="checkbox" checked={value.publishRequiresApproval} disabled={save.isPending} onChange={event => save.mutate({ ...value, publishRequiresApproval: event.target.checked })}/><span>{t('Публикация требует согласования')}</span></label>
+      <label><input type="checkbox" checked={value.editRequiresApproval} disabled={save.isPending} onChange={event => save.mutate({ ...value, editRequiresApproval: event.target.checked })}/><span>{t('Изменение черновика требует согласования')}</span></label>
+      <label><input type="checkbox" checked={value.deleteRequiresApproval} disabled={save.isPending} onChange={event => save.mutate({ ...value, deleteRequiresApproval: event.target.checked })}/><span>{t('Отмена публикации требует согласования')}</span></label>
+    </div>
+    {save.isError ? <p className={styles.error}>{publishingErrorMessage(save.error, t)}</p> : null}
+  </section>
+}
+
 export function CreatorDetailPage() {
   const { locale, t } = useI18n()
+  const { scopeKey, hasCapability } = useAccess()
+  const canEdit = hasCapability('CREATOR_EDIT')
+  const canArchive = hasCapability('CREATOR_ARCHIVE')
+  const canDelete = hasCapability('CREATOR_DELETE')
   const historyDateFormatter = new Intl.DateTimeFormat(locale === 'en' ? 'en-US' : 'ru-RU', { dateStyle: 'medium', timeStyle: 'short' })
   const { id = '' } = useParams()
   const navigate = useNavigate()
   const [contact, setContact] = useState('')
   const [archiveConfirmation, setArchiveConfirmation] = useState(false)
   const [deleteConfirmation, setDeleteConfirmation] = useState(false)
+  const archiveDialogRef = useRef<HTMLDivElement>(null)
+  const deleteDialogRef = useRef<HTMLDivElement>(null)
   const client = useQueryClient()
-  const creator = useQuery({ queryKey: ['creator', id, locale], queryFn: () => api.creator(id), enabled: Boolean(id) })
+  const creator = useQuery({ queryKey: ['creator', id, scopeKey, locale], queryFn: () => api.creator(id), enabled: Boolean(id) })
   const addContact = useMutation({ mutationFn: () => api.createContact(id, { kind: 'EMAIL', value: contact, isPrimary: !creator.data?.contacts.length }), onSuccess: () => { setContact(''); client.invalidateQueries({ queryKey: ['creator', id] }) } })
   const refreshCreatorLists = () => Promise.all([
     client.invalidateQueries({ queryKey: ['creator', id] }),
@@ -720,19 +820,28 @@ export function CreatorDetailPage() {
     removeCreator.reset()
     setDeleteConfirmation(false)
   }
+  const closeArchiveConfirmation = () => { if (!archive.isPending) setArchiveConfirmation(false) }
+  useEffect(() => {
+    if (!canArchive) setArchiveConfirmation(false)
+    if (!canDelete) setDeleteConfirmation(false)
+  }, [canArchive, canDelete])
+  useDialogFocus(archiveConfirmation, archiveDialogRef, closeArchiveConfirmation)
+  useDialogFocus(deleteConfirmation, deleteDialogRef, closeDeleteConfirmation)
   if (creator.isPending) return <p>{t('Загружаем карточку креатора…')}</p>
   if (creator.isError) return <p className={styles.error}>{t(creator.error.message)}</p>
   return <section className={styles.page}>
     <Link to="/app/creators" className={styles.back}>← {t('Креаторы')}</Link>
-    <header><div><p>{t('КАРТОЧКА КРЕАТОРА')}</p><h1>{creator.data.displayName}</h1></div><div className={styles.headerActions}>{creator.data.telegramUsername && <a className={styles.telegram} href={`https://t.me/${creator.data.telegramUsername}`} target="_blank" rel="noreferrer">{t('Открыть Telegram')}</a>}{creator.data.archivedAt ? <button type="button" className={styles.restoreButton} onClick={() => restore.mutate()} disabled={restore.isPending}>{restore.isPending ? t('Восстанавливаем…') : t('Восстановить')}</button> : <button type="button" className={styles.archiveButton} onClick={() => setArchiveConfirmation(true)}>{t('В архив')}</button>}{creator.data.canDelete ? <button type="button" className={styles.deleteButton} onClick={openDeleteConfirmation}>{t('Удалить')}</button> : null}</div></header>
+    <header><div><p>{t('КАРТОЧКА КРЕАТОРА')}</p><h1>{creator.data.displayName}</h1></div><div className={styles.headerActions}>{creator.data.telegramUsername && <a className={styles.telegram} href={`https://t.me/${creator.data.telegramUsername}`} target="_blank" rel="noreferrer">{t('Открыть Telegram')}</a>}{canArchive ? creator.data.archivedAt ? <button type="button" className={styles.restoreButton} onClick={() => restore.mutate()} disabled={restore.isPending}>{restore.isPending ? t('Восстанавливаем…') : t('Восстановить')}</button> : <button type="button" className={styles.archiveButton} onClick={() => setArchiveConfirmation(true)}>{t('В архив')}</button> : null}{canDelete&&creator.data.canDelete ? <button type="button" className={styles.deleteButton} onClick={openDeleteConfirmation}>{t('Удалить')}</button> : null}</div></header>
     {creator.data.archivedAt ? <div className={styles.archiveNotice}><span>{t('АРХИВ')}</span><div><b>{t('Карточка не показывается в рабочих списках и на дашборде')}</b><small>{t('Перенесена')} {historyDateFormatter.format(new Date(creator.data.archivedAt))}. {t('Все данные, доступы и история сохранены.')}</small></div></div> : null}
     {restore.isError ? <p className={styles.error}>{t('Не удалось восстановить карточку:')} {t(restore.error.message)}</p> : null}
     <CreatorProfile creator={creator.data} creatorID={id}/>
     <CreatorWork creator={creator.data} creatorID={id}/>
+    <ContentApprovalPolicyMatrix creatorID={id}/>
+    <CreatorLoginAccess creatorID={id}/>
     <CredentialVault creatorID={id}/>
     <PlatformConnections creatorID={id}/>
-    <section className={styles.contacts}><div className={styles.sectionHead}><div><h2>{t('Контакты')}</h2><p>{t('Дополнительные способы связи.')}</p></div></div>{creator.data.contacts.map(c => <p key={c.id}>{c.kind}: {c.value}</p>)}<form onSubmit={event => { event.preventDefault(); if (contact) addContact.mutate() }}><input value={contact} onChange={event => setContact(event.target.value)} placeholder="Email"/><button>{t('Добавить')}</button></form></section>
-    {archiveConfirmation ? <div className={styles.dialogBackdrop} role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !archive.isPending) setArchiveConfirmation(false) }}><div className={`${styles.confirmDialog} ${styles.archiveDialog}`} role="dialog" aria-modal="true" aria-labelledby="archive-creator-title"><div><span className={styles.archiveDialogMark}>↘</span><div><h3 id="archive-creator-title">{t('Перенести креатора в архив?')}</h3><p>{creator.data.displayName}</p></div></div><p>{t('Карточка исчезнет из рабочих списков и дашборда. Профиль, доступы, статистика и история изменений сохранятся — креатора можно восстановить в любой момент.')}</p>{archive.isError ? <p className={styles.error}>{t('Не удалось перенести карточку:')} {t(archive.error.message)}</p> : null}<div className={styles.dialogActions}><button type="button" onClick={() => setArchiveConfirmation(false)} disabled={archive.isPending}>{t('Отмена')}</button><button type="button" className={styles.confirmArchive} onClick={() => archive.mutate()} disabled={archive.isPending}>{archive.isPending ? t('Переносим…') : t('Перенести в архив')}</button></div></div></div> : null}
-    {deleteConfirmation ? <div className={styles.dialogBackdrop} role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) closeDeleteConfirmation() }}><div className={styles.confirmDialog} role="dialog" aria-modal="true" aria-labelledby="delete-creator-title"><div><span className={styles.dialogMark}>!</span><div><h3 id="delete-creator-title">{t('Удалить креатора навсегда?')}</h3><p>{creator.data.displayName}</p></div></div><p>{t('Это действие необратимо. Карточка креатора, история изменений и все связанные данные будут удалены навсегда. Все привязанные аккаунты будут отвязаны.')}</p>{removeCreator.isError ? <p className={styles.error}>{t('Не удалось удалить креатора:')} {t(removeCreator.error.message)}</p> : null}<div className={styles.dialogActions}><button type="button" onClick={closeDeleteConfirmation} disabled={removeCreator.isPending}>{t('Отмена')}</button><button type="button" className={styles.confirmDanger} onClick={() => removeCreator.mutate()} disabled={removeCreator.isPending}>{removeCreator.isPending ? t('Удаляем…') : t('Удалить навсегда')}</button></div></div></div> : null}
+    <section className={styles.contacts}><div className={styles.sectionHead}><div><h2>{t('Контакты')}</h2><p>{t('Дополнительные способы связи.')}</p></div></div>{creator.data.contacts.map(c => <p key={c.id}>{c.kind}: {c.value}</p>)}{canEdit?<form onSubmit={event => { event.preventDefault(); if (contact) addContact.mutate() }}><input value={contact} onChange={event => setContact(event.target.value)} placeholder="Email"/><button>{t('Добавить')}</button></form>:null}</section>
+    {archiveConfirmation ? <div className={styles.dialogBackdrop} role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) closeArchiveConfirmation() }}><div ref={archiveDialogRef} className={`${styles.confirmDialog} ${styles.archiveDialog}`} role="dialog" aria-modal="true" aria-labelledby="archive-creator-title" tabIndex={-1}><div><span className={styles.archiveDialogMark}>↘</span><div><h3 id="archive-creator-title">{t('Перенести креатора в архив?')}</h3><p>{creator.data.displayName}</p></div></div><p>{t('Карточка исчезнет из рабочих списков и дашборда. Профиль, доступы, статистика и история изменений сохранятся — креатора можно восстановить в любой момент.')}</p>{archive.isError ? <p className={styles.error}>{t('Не удалось перенести карточку:')} {t(archive.error.message)}</p> : null}<div className={styles.dialogActions}><button type="button" onClick={closeArchiveConfirmation} disabled={archive.isPending}>{t('Отмена')}</button><button type="button" className={styles.confirmArchive} onClick={() => archive.mutate()} disabled={archive.isPending}>{archive.isPending ? t('Переносим…') : t('Перенести в архив')}</button></div></div></div> : null}
+    {deleteConfirmation ? <div className={styles.dialogBackdrop} role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) closeDeleteConfirmation() }}><div ref={deleteDialogRef} className={styles.confirmDialog} role="dialog" aria-modal="true" aria-labelledby="delete-creator-title" tabIndex={-1}><div><span className={styles.dialogMark}>!</span><div><h3 id="delete-creator-title">{t('Удалить креатора навсегда?')}</h3><p>{creator.data.displayName}</p></div></div><p>{t('Это действие необратимо. Карточка креатора, история изменений и все связанные данные будут удалены навсегда. Все привязанные аккаунты будут отвязаны.')}</p>{removeCreator.isError ? <p className={styles.error}>{t('Не удалось удалить креатора:')} {t(removeCreator.error.message)}</p> : null}<div className={styles.dialogActions}><button type="button" onClick={closeDeleteConfirmation} disabled={removeCreator.isPending}>{t('Отмена')}</button><button type="button" className={styles.confirmDanger} onClick={() => removeCreator.mutate()} disabled={removeCreator.isPending}>{removeCreator.isPending ? t('Удаляем…') : t('Удалить навсегда')}</button></div></div></div> : null}
   </section>
 }

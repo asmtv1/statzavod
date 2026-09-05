@@ -12,11 +12,95 @@ paths:
   /auth/logout:
     post: { summary: Revoke current session, responses: { '204': { description: Signed out } } }
   /auth/me:
-    get: { summary: Current user, responses: { '200': { description: User }, '401': { $ref: '#/components/responses/Problem' } } }
+    get:
+      summary: Current membership principal, available scopes, capabilities, and active context
+      responses:
+        '200': { description: Principal, content: { application/json: { schema: { $ref: '#/components/schemas/AuthPrincipal' } } } }
+        '401': { $ref: '#/components/responses/Problem' }
+  /auth/context:
+    post:
+      summary: Select the active company or own creator profile for this session
+      description: OWNER may omit both IDs for all-company mode; selecting a company scopes resource access to that company. MANAGER must select an assigned company; CREATOR must select an own profile.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/AuthContextRequest' } } } }
+      responses:
+        '200': { description: Context selected }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
   /auth/accept-invitation:
-    post: { summary: Activate an invitation-only account, responses: { '201': { description: Account activated }, '400': { $ref: '#/components/responses/Problem' } } }
+    post: { deprecated: true, summary: Activate a legacy invitation-only account (one-release compatibility), responses: { '201': { description: Account activated }, '400': { $ref: '#/components/responses/Problem' }, '409': { $ref: '#/components/responses/Problem' } } }
   /users/invitations:
-    post: { summary: Create a one-time team invitation, responses: { '201': { description: Invitation created }, '403': { $ref: '#/components/responses/Problem' } } }
+    post: { deprecated: true, summary: Create a legacy one-time team invitation (one-release compatibility), responses: { '201': { description: Invitation created }, '403': { $ref: '#/components/responses/Problem' } } }
+  /users:
+    get:
+      summary: List workspace users and per-company manager grants (OWNER only)
+      responses:
+        '200': { description: Workspace users, content: { application/json: { schema: { type: object, required: [items], properties: { items: { type: array, items: { $ref: '#/components/schemas/WorkspaceUser' } } } } } } }
+        '403': { $ref: '#/components/responses/Problem' }
+    post:
+      summary: Directly create an OWNER or MANAGER account (OWNER only)
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/WorkspaceUserCreate' } } } }
+      responses:
+        '201': { description: User created, content: { application/json: { schema: { $ref: '#/components/schemas/WorkspaceUser' } } } }
+        '400': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+  /users/{id}:
+    parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+    patch:
+      summary: Change a workspace user's email or status (OWNER only)
+      description: Email and status changes revoke every session. Suspending the last active OWNER is rejected.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/WorkspaceUserUpdate' } } } }
+      responses: { '204': { description: Updated and sessions revoked when security state changed }, '400': { $ref: '#/components/responses/Problem' }, '403': { $ref: '#/components/responses/Problem' }, '404': { $ref: '#/components/responses/Problem' }, '409': { $ref: '#/components/responses/Problem' } }
+    delete:
+      summary: Delete a workspace user while preserving business records (OWNER only)
+      description: Sessions are revoked and nullable actor/history references become null. Deleting the last OWNER is rejected here; that owner must use workspace self-delete.
+      responses: { '204': { description: Deleted }, '403': { $ref: '#/components/responses/Problem' }, '404': { $ref: '#/components/responses/Problem' }, '409': { $ref: '#/components/responses/Problem' } }
+  /users/{id}/password:
+    put:
+      summary: Reset any workspace user's password (OWNER only)
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [password], properties: { password: { type: string, format: password, minLength: 12 } } } } } }
+      responses: { '204': { description: Password reset and all sessions revoked }, '400': { $ref: '#/components/responses/Problem' }, '403': { $ref: '#/components/responses/Problem' }, '404': { $ref: '#/components/responses/Problem' } }
+  /users/{id}/company-assignments:
+    put:
+      summary: Atomically replace all company assignments and permissions for a MANAGER (OWNER only)
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [items]
+              properties: { items: { type: array, items: { $ref: '#/components/schemas/ManagerCompanyAssignment' } } }
+      responses: { '200': { description: Complete replacement applied atomically }, '400': { $ref: '#/components/responses/Problem' }, '403': { $ref: '#/components/responses/Problem' }, '404': { $ref: '#/components/responses/Problem' } }
+  /users/me/deletion-impact:
+    get:
+      summary: Preview current OWNER self-deletion impact
+      description: Returns ACCOUNT when another active owner remains, otherwise WORKSPACE with tenant row counts.
+      responses:
+        '200': { description: Deletion impact, content: { application/json: { schema: { $ref: '#/components/schemas/SelfDeletionImpact' } } } }
+        '403': { $ref: '#/components/responses/Problem' }
+  /users/me:
+    delete:
+      summary: Delete the current OWNER account or schedule immediate workspace deletion
+      description: Requires the current password and exact current email. A co-owner deletes only themself. The sole owner atomically marks the workspace DELETING, blocks all sessions, and returns an anonymous receipt; the lifecycle worker completes the cascade without the company 90-day delay.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/SelfDeletionConfirmation' } } } }
+      responses:
+        '202': { description: Sole-owner workspace deletion scheduled, content: { application/json: { schema: { $ref: '#/components/schemas/DeletionScheduled' } } } }
+        '204': { description: Current co-owner account deleted }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+  /deletions/{id}:
+    get:
+      summary: Read an anonymous operational deletion receipt
+      description: Public receipt contains operation state and non-PII metadata only; it survives workspace deletion.
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        '200': { description: Anonymous receipt, content: { application/json: { schema: { $ref: '#/components/schemas/OperationalReceipt' } } } }
+        '404': { $ref: '#/components/responses/Problem' }
   /creators/{id}/connections/{platform}/authorize:
     post:
       summary: Create a platform OAuth authorization URL
@@ -35,33 +119,51 @@ paths:
   /integrations:
     get: { summary: List platform configuration and connection counts, responses: { '200': { description: Integration statuses } } }
   /platform-accounts/{id}/connection:
-    delete: { summary: Disconnect a platform and revoke its stored token (admin or analyst), responses: { '204': { description: Disconnected }, '403': { $ref: '#/components/responses/Problem' } } }
+    delete: { summary: Disconnect a visible platform account (OWNER or MANAGER with SOCIAL_CONNECT), responses: { '204': { description: Disconnected and stored token revoked }, '403': { $ref: '#/components/responses/Problem' }, '404': { $ref: '#/components/responses/Problem' } } }
   /platform-accounts/{id}/data:
-    delete: { summary: Revoke and remove a platform connection with its imported data (admin or analyst), responses: { '204': { description: Connection and data removed }, '403': { $ref: '#/components/responses/Problem' } } }
+    delete: { summary: Remove a visible platform connection and imported data (OWNER or MANAGER with SOCIAL_CONNECT), responses: { '204': { description: Connection revoked and imported data removed }, '403': { $ref: '#/components/responses/Problem' }, '404': { $ref: '#/components/responses/Problem' } } }
   /creators:
     get:
       summary: List active or archived creators
       parameters: [{ name: scope, in: query, schema: { type: string, enum: [active, archived], default: active } }]
       responses: { '200': { description: Creator list }, '400': { $ref: '#/components/responses/Problem' } }
     post:
-      summary: Create creator
+      summary: Create a creator in the active company
+      description: An active company context is required. An echoed companyId must match it; the profile company is immutable after creation. OWNER or MANAGER with CREATOR_CREATE.
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreatorInput' } } } }
-      responses: { '201': { description: Created }, '400': { $ref: '#/components/responses/Problem' } }
+      responses: { '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/CreatedResource' } } } }, '400': { $ref: '#/components/responses/Problem' }, '403': { $ref: '#/components/responses/Problem' }, '404': { $ref: '#/components/responses/Problem' } }
   /creators/{id}:
     get:
       summary: Get creator details and the current principal's delete capability
       parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
       responses: { '200': { description: Creator detail including computed canDelete boolean }, '404': { $ref: '#/components/responses/Problem' } }
     delete:
-      summary: Permanently delete a creator and all creator-owned data (admin, or owning analyst)
+      summary: Permanently delete a visible creator (OWNER or MANAGER with CREATOR_DELETE)
       parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
-      responses: { '204': { description: Deleted; linked platform accounts remain unassigned }, '403': { description: Current role cannot delete creators }, '404': { description: Creator does not exist or is not owned by the current analyst } }
+      responses: { '204': { description: Creator-owned data deleted; linked platform accounts remain unassigned }, '403': { description: Visible creator but CREATOR_DELETE is not granted }, '404': { description: Creator is missing or outside the active company context } }
+  /creators/{id}/login-account:
+    parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+    get:
+      summary: Get the creator login linked to a visible profile
+      description: OWNER or MANAGER with CREATOR_ACCOUNT_MANAGE in the active company.
+      responses: { '200': { description: Linked account or null, content: { application/json: { schema: { $ref: '#/components/schemas/CreatorLoginAccountResponse' } } } }, '403': { $ref: '#/components/responses/Problem' }, '404': { $ref: '#/components/responses/Problem' } }
+    put:
+      summary: Create or link a CREATOR login to a visible profile
+      description: A new global email requires an initial password. An existing email links only when it is a CREATOR in the same workspace. MANAGER may set only a new account's initial password; only OWNER may reset an existing account password. One login has at most one profile per company.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreatorLoginAccountInput' } } } }
+      responses: { '200': { description: Account linked, content: { application/json: { schema: { $ref: '#/components/schemas/CreatorLoginAccountResult' } } } }, '400': { $ref: '#/components/responses/Problem' }, '403': { $ref: '#/components/responses/Problem' }, '404': { $ref: '#/components/responses/Problem' }, '409': { $ref: '#/components/responses/Problem' } }
   /companies:
     get: { summary: List companies in the current organization, responses: { '200': { description: Company list } } }
     post:
       summary: Create company
       requestBody: { required: true, content: { application/json: { schema: { type: object, required: [name], properties: { name: { type: string } } } } } }
       responses: { '201': { description: Created }, '409': { $ref: '#/components/responses/Problem' } }
+  /companies/archive:
+    get:
+      summary: List archived companies and their purge deadlines (OWNER only)
+      responses:
+        '200': { description: Archived companies, content: { application/json: { schema: { type: object, required: [items], properties: { items: { type: array, items: { $ref: '#/components/schemas/ArchivedCompany' } } } } } } }
+        '403': { $ref: '#/components/responses/Problem' }
   /company-vk-accounts:
     get: { summary: List shared company VK accounts, responses: { '200': { description: Shared VK accounts without passwords } } }
   /companies/{id}/vk-account:
@@ -77,19 +179,21 @@ paths:
       responses: { '200': { description: VK ID authorization URL }, '400': { $ref: '#/components/responses/Problem' } }
   /company-vk-accounts/{id}/password/reveal:
     post:
-      summary: Reveal a shared company VK password (admin only)
+      summary: Reveal a visible shared company VK password (OWNER or MANAGER with SECRET_REVEAL)
       parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
       responses: { '200': { description: Decrypted password }, '403': { $ref: '#/components/responses/Problem' }, '404': { $ref: '#/components/responses/Problem' } }
   /companies/{id}:
     delete:
-      summary: Archive company and detach its creators
+      summary: Archive a visible company for 90-day retention (OWNER only)
+      description: Creator profiles and other company-owned data remain attached while archived; the lifecycle sets a purge deadline.
       parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
-      responses: { '204': { description: Archived }, '404': { $ref: '#/components/responses/Problem' } }
-  /companies/{id}/permanent:
-    delete:
-      summary: Permanently delete a company and detach its creators
+      responses: { '204': { description: Archived with linked data preserved }, '403': { $ref: '#/components/responses/Problem' }, '404': { $ref: '#/components/responses/Problem' } }
+  /companies/{id}/restore:
+    post:
+      summary: Restore an archived company before its purge deadline (OWNER only)
+      description: Resumes only OAuth connections and sync targets that were active when company archival paused them.
       parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
-      responses: { '204': { description: Deleted }, '404': { $ref: '#/components/responses/Problem' } }
+      responses: { '204': { description: Restored }, '403': { $ref: '#/components/responses/Problem' }, '409': { $ref: '#/components/responses/Problem' } }
   /creators/{id}/work-status:
     patch:
       summary: Update creator work status and comment
@@ -125,7 +229,7 @@ paths:
       responses: { '200': { description: Change history }, '400': { $ref: '#/components/responses/Problem' }, '404': { $ref: '#/components/responses/Problem' } }
   /creators/{id}/history/changes/{changeId}/reveal:
     post:
-      summary: Reveal an encrypted historic credential value (admin only)
+      summary: Reveal a visible historic credential value (OWNER or MANAGER with SECRET_REVEAL)
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
         - { name: changeId, in: path, required: true, schema: { type: string, format: uuid } }
@@ -137,10 +241,394 @@ paths:
     get: { summary: Snapshot time series, responses: { '200': { description: Series } } }
   /sync/health:
     get: { summary: Scheduler health, responses: { '200': { description: Health } } }
+  /exports:
+    get:
+      summary: Export creators visible in the active company context
+      description: OWNER all-company mode may combine companies. OWNER selected-company and MANAGER contexts reject creator IDs outside the active company as not found.
+      parameters:
+        - { name: creatorIds, in: query, required: true, schema: { type: string }, description: Comma-separated creator UUIDs }
+      responses:
+        '200': { description: Excel workbook }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+  /content-groups:
+    post:
+      summary: Create a content group for a creator in the active company
+      description: OWNER or MANAGER with CREATOR_EDIT. CREATOR is denied; inaccessible creator IDs are returned as not found.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [creatorId, name]
+              properties:
+                creatorId: { type: string, format: uuid }
+                name: { type: string }
+      responses:
+        '201': { description: Created }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+  /content-items:
+    get:
+      summary: List planning items in the active scope
+      parameters:
+        - { name: from, in: query, schema: { type: string, format: date-time }, description: Inclusive UTC month boundary }
+        - { name: until, in: query, schema: { type: string, format: date-time }, description: Exclusive UTC month boundary }
+      responses: { '200': { description: Planning item summaries }, '403': { $ref: '#/components/responses/Problem' } }
+  /content-items/{id}:
+    get:
+      summary: Read current content revision, targets, external links, and safe target errors
+      parameters: [ { name: id, in: path, required: true, schema: { type: string, format: uuid } } ]
+      responses: { '200': { description: Content item detail }, '404': { $ref: '#/components/responses/Problem' } }
+  /content-items/{id}/attempts:
+    get:
+      summary: Read the latest safe provider attempt history for a content item
+      parameters: [ { name: id, in: path, required: true, schema: { type: string, format: uuid } } ]
+      responses: { '200': { description: Attempt history }, '404': { $ref: '#/components/responses/Problem' } }
+  /content-items/{id}/retry:
+    post:
+      summary: Retry only failed or reauthorization-required selected targets
+      parameters: [ { name: id, in: path, required: true, schema: { type: string, format: uuid } } ]
+      requestBody: { content: { application/json: { schema: { type: object, properties: { targetIds: { type: array, items: { type: string, format: uuid } } } } } } }
+      responses: { '200': { description: Retry queued }, '409': { $ref: '#/components/responses/Problem' } }
+  /notifications:
+    get:
+      summary: List the current user's unread and recent content notifications
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100 } }
+        - { name: before, in: query, schema: { type: string }, description: "Keyset cursor createdAt,id" }
+      responses: { '200': { description: Notifications, content: { application/json: { schema: { $ref: '#/components/schemas/NotificationList' } } } } }
+  /notifications/read-all:
+    post:
+      summary: Mark all current user's notifications as read
+      responses: { '200': { description: Updated } }
+  /notifications/{notificationID}/read:
+    post:
+      summary: Mark one notification as read
+      parameters: [ { name: notificationID, in: path, required: true, schema: { type: string, format: uuid } } ]
+      responses: { '200': { description: Updated }, '404': { $ref: '#/components/responses/Problem' } }
+  /audit:
+    get:
+      summary: List redacted workspace audit records (OWNER only)
+      description: Successful authenticated business endpoints, reads, exports, reveals, mutations, and system sync/purge are recorded. Passwords, cookies, OAuth tokens, ciphertext, revealed credentials, and request bodies are never metadata.
+      parameters:
+        - { name: action, in: query, schema: { type: string } }
+        - { name: companyId, in: query, schema: { type: string, format: uuid } }
+        - { name: actorId, in: query, schema: { type: string, format: uuid } }
+        - { name: entityType, in: query, schema: { type: string } }
+        - { name: dateFrom, in: query, description: Inclusive UTC calendar date, schema: { type: string, format: date } }
+        - { name: dateTo, in: query, description: Inclusive UTC calendar date, schema: { type: string, format: date } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+        - { name: offset, in: query, schema: { type: integer, minimum: 0, default: 0 } }
+      responses:
+        '200': { description: Redacted audit page }
+        '400': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+  /creator-portal/profiles:
+    get:
+      summary: List every creator profile linked to the current CREATOR account
+      description: This is the only creator-portal operation that does not require an active profile context.
+      responses:
+        '200': { description: Own profiles, content: { application/json: { schema: { type: object, required: [items], properties: { items: { type: array, items: { $ref: '#/components/schemas/OwnCreatorProfileSummary' } } } } } } }
+        '403': { $ref: '#/components/responses/Problem' }
+  /creator-portal/profile:
+    get:
+      summary: Read the active own creator card
+      description: The profile is derived exclusively from the validated session context; no creator ID is accepted.
+      responses:
+        '200': { description: Own creator card, content: { application/json: { schema: { $ref: '#/components/schemas/OwnCreatorProfile' } } } }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+  /creator-portal/socials:
+    get:
+      summary: List socials assigned to the active own creator profile
+      responses:
+        '200': { description: Read-only assigned socials, content: { application/json: { schema: { type: object, required: [items], properties: { items: { type: array, items: { $ref: '#/components/schemas/OwnSocial' } } } } } } }
+        '403': { $ref: '#/components/responses/Problem' }
+  /creator-portal/credentials:
+    get:
+      summary: List read-only credentials of the active own creator profile
+      description: Secret values are redacted. Non-secret values may be returned; no mutation operation exists in the creator portal.
+      responses:
+        '200': { description: Own read-only credentials, content: { application/json: { schema: { type: object, required: [items], properties: { items: { type: array, items: { $ref: '#/components/schemas/OwnCredential' } } } } } } }
+        '403': { $ref: '#/components/responses/Problem' }
+  /creator-portal/credentials/{credentialID}/reveal:
+    post:
+      summary: Reveal one secret assigned to the active own creator profile
+      description: The credential is resolved beneath the active profile and current login. Cross-profile or non-secret IDs are indistinguishable from missing.
+      parameters: [{ name: credentialID, in: path, required: true, schema: { type: string } }]
+      responses:
+        '200': { description: Revealed value, content: { application/json: { schema: { type: object, required: [value], properties: { value: { type: string } } } } } }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+  /creator-portal/publications:
+    get:
+      summary: List publications of the active own creator profile for a period
+      parameters:
+        - { name: activityFrom, in: query, schema: { type: string, format: date } }
+        - { name: activityTo, in: query, schema: { type: string, format: date } }
+      responses:
+        '200': { description: Own publications and latest metrics }
+        '400': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+  /creator-portal/stats:
+    get:
+      summary: Get KPI for the active own creator profile for a period
+      parameters:
+        - { name: activityFrom, in: query, schema: { type: string, format: date } }
+        - { name: activityTo, in: query, schema: { type: string, format: date } }
+      responses:
+        '200': { description: Own KPI, content: { application/json: { schema: { $ref: '#/components/schemas/OwnCreatorStats' } } } }
+        '400': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+  /creator-portal/export:
+    get:
+      summary: Export the active own creator profile to Excel
+      description: No creator ID or creator ID list is accepted. The workbook is fully built and serialized before response headers are sent.
+      parameters:
+        - { name: activityFrom, in: query, schema: { type: string, format: date } }
+        - { name: activityTo, in: query, schema: { type: string, format: date } }
+        - { name: locale, in: query, schema: { type: string, enum: [ru, en] } }
+      responses:
+        '200': { description: XLSX for exactly the active own profile, content: { application/vnd.openxmlformats-officedocument.spreadsheetml.sheet: { schema: { type: string, format: binary } } } }
+        '400': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
 components:
   schemas:
-    LoginRequest: { type: object, required: [email, password], properties: { email: { type: string, format: email }, password: { type: string, format: password } } }
-    CreatorInput: { type: object, required: [firstName, lastName], properties: { firstName: { type: string }, lastName: { type: string }, middleName: { type: string }, displayName: { type: string }, internalNote: { type: string }, companyId: { type: string, format: uuid, nullable: true }, workStatus: { type: string, enum: [OK, NEEDS_ATTENTION, IN_PROGRESS] }, workComment: { type: string } } }
+    Notification:
+      type: object
+      required: [id, kind, contentItemId, payload, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        kind: { type: string }
+        contentItemId: { type: string, format: uuid }
+        payload: { type: object, additionalProperties: true }
+        readAt: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time }
+    NotificationList:
+      type: object
+      required: [items, unreadCount]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/Notification' } }
+        unreadCount: { type: integer }
+        nextBefore: { type: string }
+    LoginRequest: { type: object, required: [email, password], properties: { email: { type: string, format: email }, password: { type: string, format: password, minLength: 12 } } }
+    AuthContextRequest:
+      type: object
+      properties:
+        companyId: { type: string, format: uuid, nullable: true }
+        creatorId: { type: string, format: uuid, nullable: true }
+    ActiveAuthContext:
+      type: object
+      required: [allCompanies]
+      properties:
+        companyId: { type: string, format: uuid, nullable: true }
+        creatorId: { type: string, format: uuid, nullable: true }
+        allCompanies: { type: boolean }
+    AuthCompany:
+      type: object
+      required: [id, name, permissions]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        permissions: { type: array, items: { type: string } }
+    AuthCreatorProfile:
+      type: object
+      required: [id, companyId, companyName, displayName]
+      properties:
+        id: { type: string, format: uuid }
+        companyId: { type: string, format: uuid }
+        companyName: { type: string }
+        displayName: { type: string }
+    AuthPrincipal:
+      type: object
+      required: [id, email, role, capabilities, companies, creatorProfiles, activeContext]
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        role: { type: string, enum: [OWNER, MANAGER, CREATOR] }
+        capabilities: { type: array, items: { type: string } }
+        companies: { type: array, items: { $ref: '#/components/schemas/AuthCompany' } }
+        creatorProfiles: { type: array, items: { $ref: '#/components/schemas/AuthCreatorProfile' } }
+        activeContext: { $ref: '#/components/schemas/ActiveAuthContext' }
+    ManagerPermission: { type: string, enum: [STATS_VIEW, STATS_EXPORT, CREATOR_CREATE, CREATOR_EDIT, CREATOR_ARCHIVE, CREATOR_DELETE, CREATOR_ACCOUNT_MANAGE, SOCIAL_CONNECT, SYNC_MANAGE, CREDENTIAL_EDIT, SECRET_REVEAL] }
+    ManagerCompanyAssignment:
+      type: object
+      required: [companyId, permissions]
+      properties:
+        companyId: { type: string, format: uuid }
+        permissions: { type: array, uniqueItems: true, items: { $ref: '#/components/schemas/ManagerPermission' } }
+    WorkspaceUser:
+      type: object
+      required: [id, email, role, status, companyAssignments]
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        role: { type: string, enum: [OWNER, MANAGER, CREATOR] }
+        status: { type: string, enum: [ACTIVE, SUSPENDED] }
+        companyAssignments: { type: array, items: { $ref: '#/components/schemas/ManagerCompanyAssignment' } }
+    WorkspaceUserCreate:
+      type: object
+      required: [email, password, role]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string, format: password, minLength: 12 }
+        role: { type: string, enum: [OWNER, MANAGER] }
+        companyAssignments: { type: array, items: { $ref: '#/components/schemas/ManagerCompanyAssignment' } }
+    WorkspaceUserUpdate:
+      type: object
+      minProperties: 1
+      properties:
+        email: { type: string, format: email }
+        status: { type: string, enum: [ACTIVE, SUSPENDED] }
+    SelfDeletionConfirmation:
+      type: object
+      required: [currentPassword, confirmEmail]
+      properties:
+        currentPassword: { type: string, format: password, minLength: 12 }
+        confirmEmail: { type: string, format: email }
+    SelfDeletionImpact:
+      type: object
+      required: [mode, workspaceWillBeDeleted, counts]
+      properties:
+        mode: { type: string, enum: [ACCOUNT, WORKSPACE] }
+        workspaceWillBeDeleted: { type: boolean }
+        counts:
+          type: object
+          required: [users, companies, creators]
+          properties:
+            users: { type: integer, format: int64 }
+            companies: { type: integer, format: int64 }
+            creators: { type: integer, format: int64 }
+    DeletionScheduled:
+      type: object
+      required: [receiptId, status]
+      properties:
+        receiptId: { type: string, format: uuid }
+        status: { type: string, enum: [DELETING] }
+    OperationalReceipt:
+      type: object
+      required: [id, operation, status, requestedAt, metadata]
+      properties:
+        id: { type: string, format: uuid }
+        operation: { type: string, enum: [WORKSPACE_DELETE, COMPANY_PURGE] }
+        status: { type: string, enum: [PENDING, COMPLETE] }
+        requestedAt: { type: string, format: date-time }
+        completedAt: { type: string, format: date-time, nullable: true }
+        metadata: { type: object, additionalProperties: true, description: Non-PII operational fields only. }
+    ArchivedCompany:
+      type: object
+      required: [id, name, archivedAt, purgeAt, remainingSeconds, creatorCount]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        archivedAt: { type: string, format: date-time }
+        purgeAt: { type: string, format: date-time }
+        remainingSeconds: { type: integer, format: int64, minimum: 0 }
+        creatorCount: { type: integer, format: int64, minimum: 0 }
+    CreatorLoginAccountInput:
+      type: object
+      required: [email]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string, format: password, minLength: 12, description: Required for a new account; existing-account reset is OWNER-only. }
+    CreatorLoginAccount:
+      type: object
+      required: [id, email, status]
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        status: { type: string, enum: [ACTIVE, SUSPENDED] }
+    CreatorLoginAccountResponse:
+      type: object
+      required: [account]
+      properties:
+        account:
+          allOf: [{ $ref: '#/components/schemas/CreatorLoginAccount' }]
+          nullable: true
+    CreatorLoginAccountResult:
+      type: object
+      required: [id, email, created]
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        created: { type: boolean }
+    CreatedResource:
+      type: object
+      required: [id]
+      properties: { id: { type: string, format: uuid } }
+    OwnCreatorProfileSummary:
+      type: object
+      required: [id, companyId, companyName, displayName, active]
+      properties:
+        id: { type: string, format: uuid }
+        companyId: { type: string, format: uuid }
+        companyName: { type: string }
+        displayName: { type: string }
+        active: { type: boolean }
+    OwnCreatorProfile:
+      type: object
+      required: [id, companyId, companyName, firstName, lastName, middleName, displayName, status, telegramUsername, workStatus, workComment, contacts]
+      properties:
+        id: { type: string, format: uuid }
+        companyId: { type: string, format: uuid }
+        companyName: { type: string }
+        firstName: { type: string }
+        lastName: { type: string }
+        middleName: { type: string }
+        displayName: { type: string }
+        status: { type: string }
+        telegramUsername: { type: string }
+        workStatus: { type: string }
+        workComment: { type: string }
+        contacts: { type: array, items: { type: object, additionalProperties: true } }
+    OwnSocial:
+      type: object
+      required: [id, platform, displayName, status]
+      properties:
+        id: { type: string }
+        platform: { type: string, enum: [YOUTUBE, INSTAGRAM, TIKTOK, VK] }
+        username: { type: string }
+        displayName: { type: string }
+        status: { type: string }
+        profileUrl: { type: string }
+        communityUrl: { type: string }
+        recipientAccountUrl: { type: string }
+        lastSyncedAt: { type: string, format: date-time, nullable: true }
+    OwnCredential:
+      type: object
+      required: [id, section, fieldKey, isSecret, hasValue, updatedAt]
+      properties:
+        id: { type: string }
+        section: { type: string }
+        fieldKey: { type: string }
+        isSecret: { type: boolean }
+        hasValue: { type: boolean }
+        value: { type: string, description: Returned only for non-secret fields. }
+        updatedAt: { type: string, format: date-time }
+    OwnCreatorStats:
+      type: object
+      required: [creatorId, creatorName, period, kpis]
+      properties:
+        creatorId: { type: string, format: uuid }
+        creatorName: { type: string }
+        period:
+          type: object
+          required: [from, to]
+          properties:
+            from: { type: string, format: date, nullable: true }
+            to: { type: string, format: date, nullable: true }
+        kpis:
+          type: array
+          items:
+            type: object
+            required: [key, label, value]
+            properties:
+              key: { type: string }
+              label: { type: string }
+              value: { type: integer, format: int64 }
+    CreatorInput: { type: object, required: [firstName, lastName], properties: { firstName: { type: string }, lastName: { type: string }, middleName: { type: string }, displayName: { type: string }, internalNote: { type: string }, companyId: { type: string, format: uuid, nullable: true, description: Compatibility echo only; when supplied it must equal the active company and cannot later change. }, workStatus: { type: string, enum: [OK, NEEDS_ATTENTION, IN_PROGRESS] }, workComment: { type: string } } }
     Problem: { type: object, required: [title, status], properties: { type: { type: string }, title: { type: string }, status: { type: integer }, detail: { type: string } } }
   responses:
     Problem: { description: RFC 7807-style error, content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } } }

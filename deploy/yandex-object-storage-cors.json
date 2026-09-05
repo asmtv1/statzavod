@@ -1,0 +1,20 @@
+{
+  "CORSRules": [
+    {
+      "AllowedHeaders": [
+        "content-type",
+        "x-amz-checksum-crc32",
+        "x-amz-checksum-crc32c",
+        "x-amz-checksum-sha1",
+        "x-amz-checksum-sha256"
+      ],
+      "AllowedMethods": ["PUT", "HEAD", "GET"],
+      "AllowedOrigins": [
+        "https://statzavod.ru",
+        "https://www.statzavod.ru"
+      ],
+      "ExposeHeaders": ["ETag"],
+      "MaxAgeSeconds": 900
+    }
+  ]
+}

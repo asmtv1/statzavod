@@ -2,13 +2,66 @@ package httpserver
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/statzavod/statzavod/internal/config"
 )
+
+func TestTikTokRequestsRejectSameHostRedirectBeforeSecretsReachSink(t *testing.T) {
+	tests := []struct {
+		name string
+		run  func(*Server) error
+	}{
+		{name: "authorization code exchange", run: func(s *Server) error {
+			_, err := s.exchangeTikTokCode(t.Context(), "code-canary")
+			return err
+		}},
+		{name: "refresh token exchange", run: func(s *Server) error {
+			_, err := s.refreshTikTokToken(t.Context(), "refresh-token-canary")
+			return err
+		}},
+		{name: "bearer API", run: func(s *Server) error {
+			_, err := s.fetchTikTokUser(t.Context(), "bearer-canary")
+			return err
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var sinkCalls atomic.Int32
+			mux := http.NewServeMux()
+			mux.HandleFunc("/v2/oauth/token/", func(w http.ResponseWriter, r *http.Request) {
+				http.Redirect(w, r, "/sink", http.StatusTemporaryRedirect)
+			})
+			mux.HandleFunc("/v2/user/info/", func(w http.ResponseWriter, r *http.Request) {
+				http.Redirect(w, r, "/sink", http.StatusTemporaryRedirect)
+			})
+			mux.HandleFunc("/sink", func(w http.ResponseWriter, r *http.Request) {
+				sinkCalls.Add(1)
+				body, _ := io.ReadAll(r.Body)
+				if r.Header.Get("Authorization") != "" || len(body) != 0 {
+					t.Errorf("redirect sink received TikTok credentials")
+				}
+			})
+			server := httptest.NewServer(mux)
+			defer server.Close()
+			s := &Server{config: config.Config{
+				TikTokAPIBase: server.URL, TikTokClientKey: "client-canary", TikTokClientSecret: "client-secret-canary",
+			}}
+
+			if err := test.run(s); err == nil {
+				t.Fatal("same-host redirect was accepted")
+			}
+			if sinkCalls.Load() != 0 {
+				t.Fatalf("redirect sink received %d requests", sinkCalls.Load())
+			}
+		})
+	}
+}
 
 func TestTikTokAPIError(t *testing.T) {
 	tests := []struct {
@@ -117,5 +170,22 @@ func TestFetchTikTokUserIncludesCurrentProfileFields(t *testing.T) {
 	}
 	if got, want := user.AvatarURL, "https://cdn.example/avatar.jpg"; got != want {
 		t.Fatalf("avatar URL = %q, want %q", got, want)
+	}
+}
+
+func TestLegacyTikTokCallbackScopesFailClosed(t *testing.T) {
+	missing := splitScopes("", strings.Split(tiktokScopes, ","))
+	if missing == nil || len(missing) != 0 {
+		t.Fatalf("missing TikTok token scope must not inherit requested scopes: %#v", missing)
+	}
+	readiness := publishingReadiness("TIKTOK", "account", "ACTIVE", "ACTIVE", missing)
+	if readiness.Compatible || !readiness.Reauth || len(readiness.MissingScopes) != 1 || readiness.MissingScopes[0] != "video.publish" {
+		t.Fatalf("legacy callback without grant evidence became publish-ready: %#v", readiness)
+	}
+
+	explicit := splitScopes("user.info.basic,video.publish", nil)
+	readiness = publishingReadiness("TIKTOK", "account", "ACTIVE", "ACTIVE", explicit)
+	if !readiness.Compatible || readiness.Reauth || len(readiness.MissingScopes) != 0 {
+		t.Fatalf("explicit TikTok publishing grant was rejected: %#v", readiness)
 	}
 }

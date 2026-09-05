@@ -5,9 +5,14 @@
     X-Content-Type-Options "nosniff"
     X-Frame-Options "DENY"
     Referrer-Policy "strict-origin-when-cross-origin"
-    Content-Security-Policy "default-src 'self'; connect-src 'self' https://open.tiktokapis.com; img-src 'self' https: data:; style-src 'self' 'unsafe-inline'; script-src 'self'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'"
+    Content-Security-Policy "default-src 'self'; connect-src 'self' https://open.tiktokapis.com {$MEDIA_UPLOAD_ORIGIN:https://storage.yandexcloud.net}; img-src 'self' https: data:; style-src 'self' 'unsafe-inline'; script-src 'self'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'"
   }
   route {
+    # Metrics are scraped only over the private Compose network. Do not let the
+    # SPA fallback make this path public or return a misleading 200 response.
+    handle /metrics {
+      respond 404
+    }
     handle /api/* {
       reverse_proxy api:8080
     }
@@ -21,6 +26,27 @@
       root * /usr/share/caddy
       try_files {path} /index.html
       file_server
+    }
+  }
+}
+
+# Provider delivery is deliberately a separate allowlisted host. It proxies
+# only the opaque media capability endpoint, preserves Host for server-side
+# origin validation, and never exposes or redirects to Object Storage.
+{$MEDIA_SITE_ADDRESS:media.localhost} {
+  header {
+    Strict-Transport-Security "max-age=31536000; includeSubDomains"
+    X-Content-Type-Options "nosniff"
+    Referrer-Policy "no-referrer"
+  }
+  route {
+    handle /api/v1/media/delivery/* {
+      reverse_proxy api:8080 {
+        header_up Host {host}
+      }
+    }
+    handle {
+      respond 404
     }
   }
 }

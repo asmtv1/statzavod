@@ -6,18 +6,26 @@ import (
 	"encoding/base64"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"golang.org/x/crypto/argon2"
 	"golang.org/x/crypto/bcrypt"
 )
 
 func hashPassword(password string) (string, error) {
+	if !validPassword(password) {
+		return "", fmt.Errorf("password must contain at least 12 characters")
+	}
 	salt := make([]byte, 16)
 	if _, err := rand.Read(salt); err != nil {
 		return "", err
 	}
 	hash := argon2.IDKey([]byte(password), salt, 3, 64*1024, 2, 32)
 	return fmt.Sprintf("$argon2id$v=19$m=65536,t=3,p=2$%s$%s", base64.RawStdEncoding.EncodeToString(salt), base64.RawStdEncoding.EncodeToString(hash)), nil
+}
+
+func validPassword(password string) bool {
+	return utf8.ValidString(password) && utf8.RuneCountInString(password) >= 12
 }
 
 func verifyPassword(encoded, password string) bool {

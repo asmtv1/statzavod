@@ -20,6 +20,7 @@ type platformSyncJob struct {
 	TargetID       string
 	AccountID      string
 	OrganizationID string
+	CompanyID      string
 	CreatorID      string
 	Platform       string
 	ExternalID     string
@@ -28,6 +29,37 @@ type platformSyncJob struct {
 type syncResult struct {
 	RecordsRead    int
 	RecordsWritten int
+}
+
+// lockActivePlatformSyncJob is the final lifecycle gate for persistence after
+// provider I/O. Locks are always acquired workspace -> company -> account ->
+// sync target. Archive takes FOR UPDATE on the company before pausing targets;
+// this matching prefix waits for it and rejects a job claimed before archive.
+func lockActivePlatformSyncJob(ctx context.Context, tx pgx.Tx, job platformSyncJob) error {
+	if err := lockActiveCompanyTarget(ctx, tx, job.OrganizationID, job.CompanyID); err != nil {
+		return err
+	}
+	var accountID string
+	err := tx.QueryRow(ctx, `
+		SELECT id::text FROM platform_accounts
+		WHERE id=$1 AND organization_id=$2 AND company_id=$3 AND status='ACTIVE'
+		FOR KEY SHARE`, job.AccountID, job.OrganizationID, job.CompanyID).Scan(&accountID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return errOAuthTargetUnavailable
+	}
+	if err != nil {
+		return err
+	}
+	var targetID string
+	err = tx.QueryRow(ctx, `
+		SELECT id::text FROM sync_targets
+		WHERE id=$1 AND target_id=$2 AND organization_id=$3 AND company_id=$4
+		  AND status='ACTIVE' AND NOT suspended_for_company_archive
+		FOR KEY SHARE`, job.TargetID, job.AccountID, job.OrganizationID, job.CompanyID).Scan(&targetID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return errOAuthTargetUnavailable
+	}
+	return err
 }
 
 // RunOAuthTokenRefresh refreshes short-lived access tokens independently from
@@ -39,9 +71,11 @@ func (s *Server) RunOAuthTokenRefresh(ctx context.Context, limit int) (int, erro
 		limit = 50
 	}
 	rows, err := s.pool.Query(ctx, `
-		SELECT a.id,a.organization_id,a.platform,a.external_id
+		SELECT a.id,a.organization_id,a.company_id,a.platform,a.external_id
 		FROM oauth_connections c
 		JOIN platform_accounts a ON a.id=c.platform_account_id AND a.organization_id=c.organization_id
+		JOIN companies company ON company.id=a.company_id AND company.organization_id=a.organization_id AND company.archived_at IS NULL
+		JOIN organizations workspace ON workspace.id=a.organization_id AND workspace.lifecycle_state='ACTIVE'
 		WHERE c.status='ACTIVE'
 		  AND a.status<>'DISCONNECTED'
 		  AND c.expires_at IS NOT NULL
@@ -58,7 +92,7 @@ func (s *Server) RunOAuthTokenRefresh(ctx context.Context, limit int) (int, erro
 	jobs := make([]platformSyncJob, 0, limit)
 	for rows.Next() {
 		var job platformSyncJob
-		if err = rows.Scan(&job.AccountID, &job.OrganizationID, &job.Platform, &job.ExternalID); err != nil {
+		if err = rows.Scan(&job.AccountID, &job.OrganizationID, &job.CompanyID, &job.Platform, &job.ExternalID); err != nil {
 			rows.Close()
 			return 0, err
 		}
@@ -74,7 +108,7 @@ func (s *Server) RunOAuthTokenRefresh(ctx context.Context, limit int) (int, erro
 	var firstErr error
 	for _, job := range jobs {
 		processed++
-		if refreshErr := s.refreshOAuthTokenWithRetry(ctx, job); refreshErr != nil {
+		if _, refreshErr := s.refreshOAuthTokenWithRetry(ctx, job); refreshErr != nil {
 			if isProviderKind(refreshErr, providerAuth, providerPermission) {
 				if markErr := s.markOAuthReauthRequired(ctx, job, refreshErr); markErr != nil && firstErr == nil {
 					firstErr = markErr
@@ -88,17 +122,17 @@ func (s *Server) RunOAuthTokenRefresh(ctx context.Context, limit int) (int, erro
 	return processed, firstErr
 }
 
-func (s *Server) refreshOAuthTokenWithRetry(ctx context.Context, job platformSyncJob) error {
+func (s *Server) refreshOAuthTokenWithRetry(ctx context.Context, job platformSyncJob) (bool, error) {
 	const attempts = 3
 	var lastErr error
 	for attempt := 0; attempt < attempts; attempt++ {
-		if _, err := s.accessTokenForSync(ctx, job); err == nil {
-			return nil
+		if _, refreshed, err := s.accessTokenForSync(ctx, job); err == nil {
+			return refreshed, nil
 		} else {
 			lastErr = err
 		}
 		if !isProviderKind(lastErr, providerRetryable, providerRateLimit) || attempt == attempts-1 {
-			return lastErr
+			return false, lastErr
 		}
 
 		delay := time.Duration(1<<attempt) * 250 * time.Millisecond
@@ -113,11 +147,11 @@ func (s *Server) refreshOAuthTokenWithRetry(ctx context.Context, job platformSyn
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return ctx.Err()
+			return false, ctx.Err()
 		case <-timer.C:
 		}
 	}
-	return lastErr
+	return false, lastErr
 }
 
 func (s *Server) markOAuthReauthRequired(ctx context.Context, job platformSyncJob, refreshErr error) error {
@@ -146,6 +180,14 @@ func (s *Server) markOAuthReauthRequired(ctx context.Context, job platformSyncJo
 		return tx.Commit(ctx)
 	}
 	if _, err = tx.Exec(ctx, `UPDATE platform_accounts SET status='REAUTH_REQUIRED',last_error=$3,updated_at=now() WHERE id=$1 AND organization_id=$2 AND status IN ('ACTIVE','PAUSED')`, job.AccountID, job.OrganizationID, message); err != nil {
+		return err
+	}
+	companyID := job.CompanyID
+	if err = s.writeAudit(ctx, tx, auditRecord{
+		OrganizationID: job.OrganizationID, CompanyID: &companyID,
+		Action: auditSystemOAuthReauthRequired, EntityType: "PLATFORM_ACCOUNT", EntityID: &job.AccountID,
+		Metadata: map[string]any{"platform": job.Platform},
+	}); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -192,9 +234,11 @@ func (s *Server) claimPlatformSync(ctx context.Context) (platformSyncJob, bool, 
 	defer tx.Rollback(ctx)
 	var job platformSyncJob
 	err = tx.QueryRow(ctx, `
-		SELECT t.id,t.target_id,t.organization_id,COALESCE(x.creator_id::text,''),a.platform,a.external_id
+		SELECT t.id,t.target_id,t.organization_id,t.company_id,COALESCE(x.creator_id::text,''),a.platform,a.external_id
 		FROM sync_targets t
 		JOIN platform_accounts a ON a.id=t.target_id AND a.organization_id=t.organization_id
+		JOIN companies company ON company.id=t.company_id AND company.organization_id=t.organization_id AND company.archived_at IS NULL
+		JOIN organizations workspace ON workspace.id=t.organization_id AND workspace.lifecycle_state='ACTIVE'
 		LEFT JOIN creator_account_assignments x ON x.platform_account_id=a.id AND x.valid_to IS NULL
 		LEFT JOIN company_vk_accounts v ON v.platform_account_id=a.id
 		WHERE t.target_type='PLATFORM_ACCOUNT'
@@ -205,7 +249,7 @@ func (s *Server) claimPlatformSync(ctx context.Context) (platformSyncJob, bool, 
 		ORDER BY t.next_sync_at
 		FOR UPDATE OF t SKIP LOCKED
 		LIMIT 1
-	`).Scan(&job.TargetID, &job.AccountID, &job.OrganizationID, &job.CreatorID, &job.Platform, &job.ExternalID)
+	`).Scan(&job.TargetID, &job.AccountID, &job.OrganizationID, &job.CompanyID, &job.CreatorID, &job.Platform, &job.ExternalID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return platformSyncJob{}, false, tx.Commit(ctx)
 	}
@@ -218,6 +262,14 @@ func (s *Server) claimPlatformSync(ctx context.Context) (platformSyncJob, bool, 
 	if _, err = tx.Exec(ctx, `UPDATE sync_targets SET next_sync_at=now()+cadence WHERE id=$1`, job.TargetID); err != nil {
 		return platformSyncJob{}, false, err
 	}
+	companyID := job.CompanyID
+	if err = s.writeAudit(ctx, tx, auditRecord{
+		OrganizationID: job.OrganizationID, CompanyID: &companyID,
+		Action: auditSystemSyncStarted, EntityType: "PLATFORM_ACCOUNT", EntityID: &job.AccountID,
+		Metadata: map[string]any{"runId": job.RunID, "platform": job.Platform},
+	}); err != nil {
+		return platformSyncJob{}, false, err
+	}
 	if err = tx.Commit(ctx); err != nil {
 		return platformSyncJob{}, false, err
 	}
@@ -225,7 +277,7 @@ func (s *Server) claimPlatformSync(ctx context.Context) (platformSyncJob, bool, 
 }
 
 func (s *Server) syncPlatformAccount(ctx context.Context, job platformSyncJob) (syncResult, error) {
-	accessToken, err := s.accessTokenForSync(ctx, job)
+	accessToken, _, err := s.accessTokenForSync(ctx, job)
 	if err != nil {
 		return syncResult{}, err
 	}
@@ -259,7 +311,7 @@ func (s *Server) syncPlatformAccount(ctx context.Context, job platformSyncJob) (
 		}
 		result := syncResult{RecordsRead: len(videos)}
 		for _, video := range videos {
-			if err := s.upsertTikTokVideo(ctx, job.OrganizationID, job.AccountID, video); err != nil {
+			if err := s.upsertTikTokVideo(ctx, job, video); err != nil {
 				return result, err
 			}
 			result.RecordsWritten++
@@ -276,11 +328,22 @@ func (s *Server) syncPlatformAccount(ctx context.Context, job platformSyncJob) (
 // without replacing provider-specific metadata required for token refresh or
 // account selection.
 func (s *Server) refreshPlatformAccountProfile(ctx context.Context, job platformSyncJob, profile platformProfile) error {
-	metadata, _ := json.Marshal(profile.Metadata)
+	metadata, err := json.Marshal(profile.Metadata)
+	if err != nil {
+		return err
+	}
 	if len(metadata) == 0 || string(metadata) == "null" {
 		metadata = []byte("{}")
 	}
-	_, err := s.pool.Exec(ctx, `
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = lockActivePlatformSyncJob(ctx, tx, job); err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx, `
 		UPDATE platform_accounts a
 		SET username=$4,display_name=$5,profile_url=$6,avatar_url=$7,
 			account_type=COALESCE(NULLIF($8,''),a.account_type),
@@ -290,7 +353,10 @@ func (s *Server) refreshPlatformAccountProfile(ctx context.Context, job platform
 			AND EXISTS(SELECT 1 FROM oauth_connections c WHERE c.platform_account_id=a.id AND c.status='ACTIVE')
 	`, job.AccountID, job.OrganizationID, job.Platform, profile.Username, profile.DisplayName,
 		profile.ProfileURL, profile.AvatarURL, profile.AccountType, string(metadata))
-	return err
+	if err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func (s *Server) finishPlatformSync(ctx context.Context, job platformSyncJob, result syncResult, syncErr error) error {
@@ -299,6 +365,13 @@ func (s *Server) finishPlatformSync(ctx context.Context, job platformSyncJob, re
 		return err
 	}
 	defer tx.Rollback(ctx)
+	if err = lockActivePlatformSyncJob(ctx, tx, job); errors.Is(err, errOAuthTargetUnavailable) {
+		// Archive owns the terminal state. Its cascade removed or paused the
+		// target, so do not resurrect it merely to record a late outcome.
+		return tx.Commit(ctx)
+	} else if err != nil {
+		return err
+	}
 	if syncErr == nil {
 		if _, err = tx.Exec(ctx, `UPDATE sync_runs SET finished_at=now(),outcome='SUCCESS',records_read=$2,records_written=$3 WHERE id=$1`, job.RunID, result.RecordsRead, result.RecordsWritten); err != nil {
 			return err
@@ -307,6 +380,14 @@ func (s *Server) finishPlatformSync(ctx context.Context, job platformSyncJob, re
 			return err
 		}
 		if _, err = tx.Exec(ctx, `UPDATE platform_accounts SET last_synced_at=now(),last_error=NULL,status='ACTIVE',updated_at=now() WHERE id=$1 AND status<>'DISCONNECTED' AND EXISTS(SELECT 1 FROM sync_targets WHERE id=$2 AND status='ACTIVE') AND EXISTS(SELECT 1 FROM oauth_connections WHERE platform_account_id=$1 AND status='ACTIVE')`, job.AccountID, job.TargetID); err != nil {
+			return err
+		}
+		companyID := job.CompanyID
+		if err = s.writeAudit(ctx, tx, auditRecord{
+			OrganizationID: job.OrganizationID, CompanyID: &companyID,
+			Action: auditSystemSyncSuccess, EntityType: "PLATFORM_ACCOUNT", EntityID: &job.AccountID,
+			Metadata: map[string]any{"recordsRead": result.RecordsRead, "recordsWritten": result.RecordsWritten},
+		}); err != nil {
 			return err
 		}
 		return tx.Commit(ctx)
@@ -336,16 +417,24 @@ func (s *Server) finishPlatformSync(ctx context.Context, job platformSyncJob, re
 			return err
 		}
 	}
+	companyID := job.CompanyID
+	if err = s.writeAudit(ctx, tx, auditRecord{
+		OrganizationID: job.OrganizationID, CompanyID: &companyID,
+		Action: auditSystemSyncFailed, EntityType: "PLATFORM_ACCOUNT", EntityID: &job.AccountID,
+		Metadata: map[string]any{"recordsRead": result.RecordsRead, "recordsWritten": result.RecordsWritten},
+	}); err != nil {
+		return err
+	}
 	return tx.Commit(ctx)
 }
 
-func (s *Server) accessTokenForSync(ctx context.Context, job platformSyncJob) (string, error) {
+func (s *Server) accessTokenForSync(ctx context.Context, job platformSyncJob) (string, bool, error) {
 	if s.envelope == nil {
-		return "", fmt.Errorf("token encryption is not configured")
+		return "", false, fmt.Errorf("token encryption is not configured")
 	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	defer tx.Rollback(ctx)
 
@@ -355,19 +444,22 @@ func (s *Server) accessTokenForSync(ctx context.Context, job platformSyncJob) (s
 	err = tx.QueryRow(ctx, `
 		SELECT access_token_ciphertext,access_token_nonce,
 		       COALESCE(refresh_token_ciphertext,''::bytea),COALESCE(refresh_token_nonce,''::bytea),expires_at,a.metadata
-		FROM oauth_connections c JOIN platform_accounts a ON a.id=c.platform_account_id
+		FROM oauth_connections c
+		JOIN platform_accounts a ON a.id=c.platform_account_id AND a.organization_id=c.organization_id
+		JOIN companies company ON company.id=a.company_id AND company.organization_id=a.organization_id AND company.archived_at IS NULL
+		JOIN organizations workspace ON workspace.id=a.organization_id AND workspace.lifecycle_state='ACTIVE'
 		WHERE c.platform_account_id=$1 AND c.organization_id=$2 AND c.status='ACTIVE'
 		FOR UPDATE
 	`, job.AccountID, job.OrganizationID).Scan(&accessCipher, &accessNonce, &refreshCipher, &refreshNonce, &expiresAt, &accountMetadata)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return "", &providerError{Platform: job.Platform, Kind: providerAuth, Message: "authorization is missing or inactive"}
+			return "", false, &providerError{Platform: job.Platform, Kind: providerAuth, Message: "authorization is missing or inactive"}
 		}
-		return "", err
+		return "", false, err
 	}
 	accessPlain, err := s.envelope.Decrypt(accessCipher, accessNonce)
 	if err != nil {
-		return "", fmt.Errorf("decrypt access token: %w", err)
+		return "", false, fmt.Errorf("decrypt access token: %w", err)
 	}
 
 	refreshBefore := 10 * time.Minute
@@ -376,36 +468,38 @@ func (s *Server) accessTokenForSync(ctx context.Context, job platformSyncJob) (s
 	}
 	if expiresAt == nil || expiresAt.After(time.Now().Add(refreshBefore)) {
 		if err = tx.Commit(ctx); err != nil {
-			return "", err
+			return "", false, err
 		}
-		return string(accessPlain), nil
+		return string(accessPlain), false, nil
 	}
 
 	var refreshed oauthToken
 	var metadata map[string]any
-	_ = json.Unmarshal(accountMetadata, &metadata)
+	if err = json.Unmarshal(accountMetadata, &metadata); err != nil {
+		return "", false, fmt.Errorf("decode platform account metadata: %w", err)
+	}
 	switch job.Platform {
 	case "YOUTUBE":
 		if len(refreshCipher) == 0 || len(refreshNonce) == 0 {
-			return "", &providerError{Platform: "YouTube", Kind: providerAuth, Message: "refresh token is missing"}
+			return "", false, &providerError{Platform: "YouTube", Kind: providerAuth, Message: "refresh token is missing"}
 		}
 		refreshPlain, decryptErr := s.envelope.Decrypt(refreshCipher, refreshNonce)
 		if decryptErr != nil {
-			return "", decryptErr
+			return "", false, decryptErr
 		}
 		refreshed, err = s.refreshYouTubeAccessToken(ctx, string(refreshPlain))
 	case "INSTAGRAM":
 		if metadata["connectionMode"] == "FACEBOOK" {
 			if len(refreshCipher) == 0 || len(refreshNonce) == 0 {
-				return "", &providerError{Platform: "Instagram", Kind: providerAuth, Message: "Facebook user authorization is missing; reconnect the account"}
+				return "", false, &providerError{Platform: "Instagram", Kind: providerAuth, Message: "Facebook user authorization is missing; reconnect the account"}
 			}
 			userAccessToken, decryptErr := s.envelope.Decrypt(refreshCipher, refreshNonce)
 			if decryptErr != nil {
-				return "", decryptErr
+				return "", false, decryptErr
 			}
 			pageID, _ := metadata["facebookPageId"].(string)
 			if pageID == "" {
-				return "", &providerError{Platform: "Instagram", Kind: providerAuth, Message: "Facebook Page identity is missing; reconnect the account"}
+				return "", false, &providerError{Platform: "Instagram", Kind: providerAuth, Message: "Facebook Page identity is missing; reconnect the account"}
 			}
 			refreshed, err = s.refreshInstagramFacebookAccessToken(ctx, string(userAccessToken), pageID, job.ExternalID)
 		} else {
@@ -413,49 +507,49 @@ func (s *Server) accessTokenForSync(ctx context.Context, job platformSyncJob) (s
 		}
 	case "TIKTOK":
 		if len(refreshCipher) == 0 || len(refreshNonce) == 0 {
-			return "", &providerError{Platform: "TikTok", Kind: providerAuth, Message: "refresh token is missing"}
+			return "", false, &providerError{Platform: "TikTok", Kind: providerAuth, Message: "refresh token is missing"}
 		}
 		refreshPlain, decryptErr := s.envelope.Decrypt(refreshCipher, refreshNonce)
 		if decryptErr != nil {
-			return "", decryptErr
+			return "", false, decryptErr
 		}
 		var token tiktokTokenData
 		token, err = s.refreshTikTokToken(ctx, string(refreshPlain))
 		refreshed = oauthToken{AccessToken: token.AccessToken, RefreshToken: token.RefreshToken, ExpiresIn: token.ExpiresIn, Scopes: splitScopes(token.Scope, nil)}
 	case "VK":
 		if len(refreshCipher) == 0 || len(refreshNonce) == 0 {
-			return "", &providerError{Platform: "VK", Kind: providerAuth, Message: "refresh token is missing"}
+			return "", false, &providerError{Platform: "VK", Kind: providerAuth, Message: "refresh token is missing"}
 		}
 		refreshPlain, decryptErr := s.envelope.Decrypt(refreshCipher, refreshNonce)
 		if decryptErr != nil {
-			return "", decryptErr
+			return "", false, decryptErr
 		}
 		deviceID, _ := metadata["deviceId"].(string)
 		refreshed, err = s.refreshVKAccessToken(ctx, string(refreshPlain), deviceID)
 	default:
-		return "", &providerError{Platform: job.Platform, Kind: providerAuth, Message: "authorization expired"}
+		return "", false, &providerError{Platform: job.Platform, Kind: providerAuth, Message: "authorization expired"}
 	}
 	if err != nil {
 		var providerErr *providerError
 		if errors.As(err, &providerErr) {
-			return "", err
+			return "", false, err
 		}
 		// Network, decoding and other unclassified failures are retryable. They
 		// must not invalidate a still-recoverable OAuth connection.
-		return "", &providerError{Platform: job.Platform, Kind: providerRetryable, Message: "token refresh failed"}
+		return "", false, &providerError{Platform: job.Platform, Kind: providerRetryable, Message: "token refresh failed"}
 	}
 	if refreshed.AccessToken == "" {
-		return "", &providerError{Platform: job.Platform, Kind: providerSchema, Message: "token refresh returned an empty token"}
+		return "", false, &providerError{Platform: job.Platform, Kind: providerSchema, Message: "token refresh returned an empty token"}
 	}
 	newAccess, newAccessNonce, err := s.envelope.Encrypt([]byte(refreshed.AccessToken))
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	newRefresh, newRefreshNonce := refreshCipher, refreshNonce
 	if refreshed.RefreshToken != "" {
 		newRefresh, newRefreshNonce, err = s.envelope.Encrypt([]byte(refreshed.RefreshToken))
 		if err != nil {
-			return "", err
+			return "", false, err
 		}
 	}
 	var refreshedExpiry *time.Time
@@ -477,12 +571,20 @@ func (s *Server) accessTokenForSync(ctx context.Context, job platformSyncJob) (s
 		WHERE platform_account_id=$1
 	`, job.AccountID, newAccess, newAccessNonce, newRefresh, newRefreshNonce, refreshedExpiry, scopes)
 	if err != nil {
-		return "", err
+		return "", false, err
+	}
+	companyID := job.CompanyID
+	if err = s.writeAudit(ctx, tx, auditRecord{
+		OrganizationID: job.OrganizationID, CompanyID: &companyID,
+		Action: auditSystemOAuthRefresh, EntityType: "PLATFORM_ACCOUNT", EntityID: &job.AccountID,
+		Metadata: map[string]any{"platform": job.Platform},
+	}); err != nil {
+		return "", false, err
 	}
 	if err = tx.Commit(ctx); err != nil {
-		return "", err
+		return "", false, err
 	}
-	return refreshed.AccessToken, nil
+	return refreshed.AccessToken, true, nil
 }
 
 func (s *Server) refreshYouTubeAccessToken(ctx context.Context, refreshToken string) (oauthToken, error) {
@@ -555,24 +657,62 @@ func (s *Server) refreshInstagramFacebookAccessToken(ctx context.Context, userAc
 func (s *Server) requestAccountSync(w http.ResponseWriter, r *http.Request) {
 	p := r.Context().Value(principalKey).(principal)
 	accountID := chi.URLParam(r, "id")
-	tag, err := s.pool.Exec(r.Context(), `
-		UPDATE sync_targets target SET next_sync_at=now(),status='ACTIVE',last_error=NULL
-		WHERE target.target_id=$1 AND target.organization_id=$2
-		  AND EXISTS(
-			SELECT 1 FROM platform_accounts account
-			JOIN oauth_connections oauth ON oauth.platform_account_id=account.id AND oauth.organization_id=account.organization_id
-			WHERE account.id=target.target_id AND account.organization_id=target.organization_id
-			  AND account.status='ACTIVE' AND oauth.status='ACTIVE'
-		  )
-	`, accountID, p.OrganizationID)
+	tx, err := s.pool.Begin(r.Context())
 	if err != nil {
+		problem(w, http.StatusInternalServerError, "sync request failed", "could not start synchronization request")
+		return
+	}
+	defer tx.Rollback(r.Context())
+	var companyID string
+	err = tx.QueryRow(r.Context(), `
+		SELECT company_id::text FROM platform_accounts
+		WHERE id=$1 AND organization_id=$2 AND status='ACTIVE'`, accountID, p.OrganizationID).Scan(&companyID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		problem(w, http.StatusNotFound, "connection not found", "platform account has no active synchronization target")
+		return
+	}
+	if err != nil {
+		problem(w, http.StatusInternalServerError, "sync request failed", "could not load platform account")
+		return
+	}
+	if err = lockActiveCompanyTarget(r.Context(), tx, p.OrganizationID, companyID); errors.Is(err, errOAuthTargetUnavailable) {
+		problem(w, http.StatusNotFound, "connection not found", "platform account belongs to an archived company")
+		return
+	} else if err != nil {
+		problem(w, http.StatusInternalServerError, "sync request failed", "could not validate active company")
+		return
+	}
+	err = tx.QueryRow(r.Context(), `
+		UPDATE sync_targets target SET next_sync_at=now(),status='ACTIVE',last_error=NULL
+		FROM platform_accounts account
+		WHERE target.target_id=$1 AND target.organization_id=$2
+		  AND account.id=target.target_id AND account.organization_id=target.organization_id
+		  AND account.company_id=$3
+		  AND EXISTS(
+			SELECT 1 FROM oauth_connections oauth
+			WHERE oauth.platform_account_id=account.id AND oauth.organization_id=account.organization_id
+			  AND oauth.status='ACTIVE'
+		  )
+		  AND account.status='ACTIVE'
+		RETURNING account.company_id::text
+	`, accountID, p.OrganizationID, companyID).Scan(&companyID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			problem(w, http.StatusNotFound, "connection not found", "platform account has no synchronization target")
+			return
+		}
 		problem(w, http.StatusInternalServerError, "sync request failed", "could not queue synchronization")
 		return
 	}
-	if tag.RowsAffected() == 0 {
-		problem(w, http.StatusNotFound, "connection not found", "platform account has no synchronization target")
+	if err = s.writeAudit(r.Context(), tx, requestAuditRecord(r, p, &companyID, "REQUEST_PLATFORM_SYNC", "PLATFORM_ACCOUNT", &accountID, http.StatusAccepted, map[string]any{})); err != nil {
+		problem(w, http.StatusInternalServerError, "sync request failed", "could not write audit record")
 		return
 	}
+	if err = tx.Commit(r.Context()); err != nil {
+		problem(w, http.StatusInternalServerError, "sync request failed", "could not commit synchronization request")
+		return
+	}
+	markResponseAuditCommitted(w)
 	writeJSON(w, http.StatusAccepted, map[string]any{"accountId": accountID, "status": "QUEUED"})
 }
 
@@ -597,9 +737,30 @@ func (s *Server) setPlatformAccountPaused(w http.ResponseWriter, r *http.Request
 	if paused {
 		accountStatus, targetStatus = "PAUSED", "PAUSED"
 	}
-	tag, err := tx.Exec(r.Context(), `UPDATE platform_accounts SET status=$3,updated_at=now() WHERE id=$1 AND organization_id=$2 AND status<>'DISCONNECTED'`, accountID, p.OrganizationID, accountStatus)
-	if err != nil || tag.RowsAffected() == 0 {
+	var companyID string
+	err = tx.QueryRow(r.Context(), `SELECT company_id::text FROM platform_accounts WHERE id=$1 AND organization_id=$2 AND status<>'DISCONNECTED'`, accountID, p.OrganizationID).Scan(&companyID)
+	if errors.Is(err, pgx.ErrNoRows) {
 		problem(w, http.StatusNotFound, "connection not found", "platform account does not exist")
+		return
+	}
+	if err != nil {
+		problem(w, http.StatusInternalServerError, "account update failed", "could not update platform account")
+		return
+	}
+	if err = lockActiveCompanyTarget(r.Context(), tx, p.OrganizationID, companyID); errors.Is(err, errOAuthTargetUnavailable) {
+		problem(w, http.StatusNotFound, "connection not found", "platform account belongs to an archived company")
+		return
+	} else if err != nil {
+		problem(w, http.StatusInternalServerError, "account update failed", "could not validate active company")
+		return
+	}
+	err = tx.QueryRow(r.Context(), `UPDATE platform_accounts SET status=$4,updated_at=now() WHERE id=$1 AND organization_id=$2 AND company_id=$3 AND status<>'DISCONNECTED' RETURNING company_id::text`, accountID, p.OrganizationID, companyID, accountStatus).Scan(&companyID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		problem(w, http.StatusNotFound, "connection not found", "platform account does not exist")
+		return
+	}
+	if err != nil {
+		problem(w, http.StatusInternalServerError, "account update failed", "could not update platform account")
 		return
 	}
 	if _, err = tx.Exec(r.Context(), `UPDATE sync_targets SET status=$3,next_sync_at=CASE WHEN $3='ACTIVE' THEN now() ELSE next_sync_at END WHERE target_id=$1 AND organization_id=$2`, accountID, p.OrganizationID, targetStatus); err != nil {
@@ -610,12 +771,15 @@ func (s *Server) setPlatformAccountPaused(w http.ResponseWriter, r *http.Request
 	if paused {
 		action = "PAUSE_PLATFORM_ACCOUNT"
 	}
-	metadata, _ := json.Marshal(map[string]string{"accountId": accountID})
-	_, _ = tx.Exec(r.Context(), `INSERT INTO audit_logs(organization_id,actor_id,action,entity_type,entity_id,metadata) VALUES($1,$2,$3,'PLATFORM_ACCOUNT',$4,$5::jsonb)`, p.OrganizationID, p.ID, action, accountID, string(metadata))
+	if err = s.writeAudit(r.Context(), tx, requestAuditRecord(r, p, &companyID, action, "PLATFORM_ACCOUNT", &accountID, http.StatusNoContent, map[string]any{"accountId": accountID})); err != nil {
+		problem(w, http.StatusInternalServerError, "account update failed", "could not write audit record")
+		return
+	}
 	if err = tx.Commit(r.Context()); err != nil {
 		problem(w, http.StatusInternalServerError, "account update failed", "could not commit account state")
 		return
 	}
+	markResponseAuditCommitted(w)
 	w.WriteHeader(http.StatusNoContent)
 }
 

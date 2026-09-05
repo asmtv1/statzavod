@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"io"
 	"math/rand/v2"
+	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -58,29 +60,47 @@ type providerClient struct {
 	retries  int
 }
 
+// providerRequestMode makes retry semantics explicit at every provider call.
+// Create-like operations must use providerOneShot: a timeout, 429 or 5xx can
+// mean the provider accepted the request, so replaying it could create a
+// duplicate. Read/status operations may use providerSafeRetry.
+type providerRequestMode uint8
+
+const (
+	providerSafeRetry providerRequestMode = iota
+	providerOneShot
+)
+
+var errProviderRedirect = errors.New("provider redirect rejected")
+
 func newProviderClient(platform string) providerClient {
 	return providerClient{
 		platform: platform,
 		client: &http.Client{
-			Timeout: 20 * time.Second,
-			CheckRedirect: func(req *http.Request, via []*http.Request) error {
-				if len(via) >= 5 {
-					return fmt.Errorf("too many redirects")
-				}
-				// Never forward a bearer token to a different host.
-				if len(via) > 0 && req.URL.Host != via[0].URL.Host {
-					req.Header.Del("Authorization")
-				}
-				return nil
-			},
+			Timeout:       20 * time.Second,
+			CheckRedirect: rejectProviderRedirect,
 		},
 		retries: 3,
 	}
 }
 
 func (c providerClient) JSON(ctx context.Context, method, endpoint, bearer, contentType string, body io.Reader, target any) error {
+	return c.JSONWithMode(ctx, method, endpoint, bearer, contentType, body, target, providerSafeRetry)
+}
+
+func (c providerClient) JSONWithMode(ctx context.Context, method, endpoint, bearer, contentType string, body io.Reader, target any, mode providerRequestMode) error {
 	var lastErr error
-	for attempt := 0; attempt < c.retries; attempt++ {
+	httpClient := c.client
+	if mode == providerOneShot {
+		clone := *c.client
+		clone.CheckRedirect = rejectProviderRedirect
+		httpClient = &clone
+	}
+	attempts := c.retries
+	if mode == providerOneShot {
+		attempts = 1
+	}
+	for attempt := 0; attempt < attempts; attempt++ {
 		var requestBody io.Reader
 		if body != nil {
 			readCloser, ok := body.(io.ReadSeeker)
@@ -106,10 +126,13 @@ func (c providerClient) JSON(ctx context.Context, method, endpoint, bearer, cont
 		}
 		req.Header.Set("Accept", "application/json")
 
-		resp, err := c.client.Do(req)
+		resp, err := httpClient.Do(req)
 		if err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
+			}
+			if errors.Is(err, errProviderRedirect) {
+				return &providerError{Platform: c.platform, Kind: providerPermanent, Message: errProviderRedirect.Error()}
 			}
 			lastErr = &providerError{Platform: c.platform, Kind: providerRetryable, Message: "network request failed"}
 		} else {
@@ -120,7 +143,10 @@ func (c providerClient) JSON(ctx context.Context, method, endpoint, bearer, cont
 		}
 
 		var apiErr *providerError
-		if !errors.As(lastErr, &apiErr) || (apiErr.Kind != providerRateLimit && apiErr.Kind != providerRetryable) || attempt == c.retries-1 {
+		if mode == providerOneShot && errors.As(lastErr, &apiErr) && (apiErr.Kind == providerRateLimit || apiErr.Kind == providerRetryable) {
+			return &providerError{Platform: c.platform, Kind: providerPermanent, StatusCode: apiErr.StatusCode, Message: "provider outcome is uncertain; manual reconciliation is required"}
+		}
+		if !errors.As(lastErr, &apiErr) || (apiErr.Kind != providerRateLimit && apiErr.Kind != providerRetryable) || attempt == attempts-1 {
 			return lastErr
 		}
 		delay := apiErr.RetryAfter
@@ -140,6 +166,50 @@ func (c providerClient) JSON(ctx context.Context, method, endpoint, bearer, cont
 		}
 	}
 	return lastErr
+}
+
+// validateProviderURL is a fail-closed allowlist for capability/upload URLs.
+// Entries beginning with a dot allow that DNS suffix and its apex.
+func validateProviderURL(value string, allowedHosts ...string) error {
+	u, err := url.Parse(strings.TrimSpace(value))
+	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || (u.Port() != "" && u.Port() != "443") {
+		return fmt.Errorf("provider URL must be HTTPS without credentials or a non-standard port")
+	}
+	host := strings.ToLower(strings.TrimSuffix(u.Hostname(), "."))
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
+		return fmt.Errorf("provider URL host is not allowed")
+	}
+	if ip := net.ParseIP(host); ip != nil && (ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified()) {
+		return fmt.Errorf("provider URL address is not allowed")
+	}
+	allowed := false
+	for _, entry := range allowedHosts {
+		entry = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(entry), "."))
+		if strings.HasPrefix(entry, ".") {
+			apex := strings.TrimPrefix(entry, ".")
+			allowed = host == apex || strings.HasSuffix(host, entry)
+		} else {
+			allowed = host == entry
+		}
+		if allowed {
+			break
+		}
+	}
+	if !allowed {
+		return fmt.Errorf("provider URL host is not allowed")
+	}
+	return nil
+}
+
+func newValidatedProviderHTTPClient(_ func(string) error) *http.Client {
+	return &http.Client{
+		Timeout:       20 * time.Second,
+		CheckRedirect: rejectProviderRedirect,
+	}
+}
+
+func rejectProviderRedirect(*http.Request, []*http.Request) error {
+	return errProviderRedirect
 }
 
 func (c providerClient) decodeResponse(resp *http.Response, target any) error {

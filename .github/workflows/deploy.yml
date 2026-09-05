@@ -38,6 +38,24 @@ jobs:
       - name: Vet Go
         run: go vet -mod=readonly ./...
 
+      - name: Validate production Compose and Prometheus configuration
+        env:
+          APP_IMAGE: ghcr.io/example/statzavod-app:test
+          WEB_IMAGE: ghcr.io/example/statzavod-web:test
+          POSTGRES_PASSWORD: test-only
+          POSTGRES_PASSWORD_URLENCODED: test-only
+        run: |
+          set -euo pipefail
+          docker compose \
+            --env-file deploy/.env.production.example \
+            -f deploy/compose.production.yml \
+            config --quiet
+          docker run --rm \
+            --volume "$PWD/deploy:/etc/prometheus:ro" \
+            --entrypoint /bin/promtool \
+            prom/prometheus:v3.13.2 \
+            check config /etc/prometheus/prometheus.yml
+
       - name: Build Go binaries
         run: go build -mod=readonly ./...
 
@@ -55,6 +73,18 @@ jobs:
       - name: Build web
         working-directory: web
         run: npm run build
+
+      - name: Lint and test web
+        working-directory: web
+        run: npm run lint && npm run check:i18n && npm run test
+
+      - name: Install Playwright Chromium
+        working-directory: web
+        run: npx playwright install --with-deps chromium
+
+      - name: Test production browser upload headers
+        working-directory: web
+        run: npm run e2e -- production-upload-cors.spec.ts
 
   images:
     name: Build and publish images
@@ -154,6 +184,7 @@ jobs:
           PUBLIC_BASE_URL: ${{ vars.PUBLIC_BASE_URL }}
           CORS_ORIGIN: ${{ vars.CORS_ORIGIN }}
           SITE_ADDRESS: ${{ vars.SITE_ADDRESS }}
+          MEDIA_SITE_ADDRESS: ${{ vars.MEDIA_SITE_ADDRESS }}
           BOOTSTRAP_EMAIL: ${{ vars.BOOTSTRAP_EMAIL }}
           BOOTSTRAP_PASSWORD: ${{ secrets.BOOTSTRAP_PASSWORD }}
           TOKEN_ENCRYPTION_KEY: ${{ secrets.TOKEN_ENCRYPTION_KEY }}
@@ -174,6 +205,20 @@ jobs:
           VK_OAUTH_CLIENT_ID: ${{ vars.VK_OAUTH_CLIENT_ID }}
           VK_OAUTH_CLIENT_SECRET: ${{ secrets.VK_OAUTH_CLIENT_SECRET }}
           VK_OAUTH_REDIRECT_URL: ${{ vars.VK_OAUTH_REDIRECT_URL }}
+          CONTENT_PUBLISHING_ENABLED: ${{ vars.CONTENT_PUBLISHING_ENABLED }}
+          CONTENT_TIKTOK_ENABLED: ${{ vars.CONTENT_TIKTOK_ENABLED }}
+          CONTENT_INSTAGRAM_ENABLED: ${{ vars.CONTENT_INSTAGRAM_ENABLED }}
+          CONTENT_YOUTUBE_ENABLED: ${{ vars.CONTENT_YOUTUBE_ENABLED }}
+          CONTENT_VK_ENABLED: ${{ vars.CONTENT_VK_ENABLED }}
+          PROMETHEUS_RETENTION_TIME: ${{ vars.PROMETHEUS_RETENTION_TIME }}
+          MEDIA_S3_ENDPOINT: ${{ vars.MEDIA_S3_ENDPOINT }}
+          MEDIA_UPLOAD_ORIGIN: ${{ vars.MEDIA_UPLOAD_ORIGIN }}
+          MEDIA_S3_REGION: ${{ vars.MEDIA_S3_REGION }}
+          MEDIA_S3_BUCKET: ${{ vars.MEDIA_S3_BUCKET }}
+          MEDIA_S3_ACCESS_KEY: ${{ secrets.MEDIA_S3_ACCESS_KEY }}
+          MEDIA_S3_SECRET_KEY: ${{ secrets.MEDIA_S3_SECRET_KEY }}
+          MEDIA_PUBLIC_BASE_URL: ${{ vars.MEDIA_PUBLIC_BASE_URL }}
+          MEDIA_DELIVERY_TOKEN_KEY: ${{ secrets.MEDIA_DELIVERY_TOKEN_KEY }}
         run: |
           set -euo pipefail
           node <<'NODE'
@@ -208,6 +253,7 @@ jobs:
             PUBLIC_BASE_URL: env.PUBLIC_BASE_URL || "https://statzavod.ru",
             CORS_ORIGIN: env.CORS_ORIGIN || "https://statzavod.ru",
             SITE_ADDRESS: env.SITE_ADDRESS || "statzavod.ru, www.statzavod.ru",
+            MEDIA_SITE_ADDRESS: env.MEDIA_SITE_ADDRESS || "media.statzavod.ru",
             BOOTSTRAP_EMAIL: env.BOOTSTRAP_EMAIL || "admin@example.com",
             BOOTSTRAP_PASSWORD: env.BOOTSTRAP_PASSWORD,
             TOKEN_ENCRYPTION_KEY: env.TOKEN_ENCRYPTION_KEY,
@@ -237,7 +283,21 @@ jobs:
             VK_OAUTH_CLIENT_SECRET: env.VK_OAUTH_CLIENT_SECRET || "",
             VK_OAUTH_REDIRECT_URL:
               env.VK_OAUTH_REDIRECT_URL ||
-              "https://statzavod.ru/api/v1/oauth/vk/callback"
+              "https://statzavod.ru/api/v1/oauth/vk/callback",
+            CONTENT_PUBLISHING_ENABLED: env.CONTENT_PUBLISHING_ENABLED || "false",
+            CONTENT_TIKTOK_ENABLED: env.CONTENT_TIKTOK_ENABLED || "false",
+            CONTENT_INSTAGRAM_ENABLED: env.CONTENT_INSTAGRAM_ENABLED || "false",
+            CONTENT_YOUTUBE_ENABLED: env.CONTENT_YOUTUBE_ENABLED || "false",
+            CONTENT_VK_ENABLED: env.CONTENT_VK_ENABLED || "false",
+            PROMETHEUS_RETENTION_TIME: env.PROMETHEUS_RETENTION_TIME || "15d",
+            MEDIA_S3_ENDPOINT: env.MEDIA_S3_ENDPOINT || "https://storage.yandexcloud.net",
+            MEDIA_UPLOAD_ORIGIN: env.MEDIA_UPLOAD_ORIGIN || "https://storage.yandexcloud.net",
+            MEDIA_S3_REGION: env.MEDIA_S3_REGION || "ru-central1",
+            MEDIA_S3_BUCKET: env.MEDIA_S3_BUCKET || "",
+            MEDIA_S3_ACCESS_KEY: env.MEDIA_S3_ACCESS_KEY || "",
+            MEDIA_S3_SECRET_KEY: env.MEDIA_S3_SECRET_KEY || "",
+            MEDIA_PUBLIC_BASE_URL: env.MEDIA_PUBLIC_BASE_URL || "https://media.statzavod.ru",
+            MEDIA_DELIVERY_TOKEN_KEY: env.MEDIA_DELIVERY_TOKEN_KEY || ""
           };
 
           const quote = (value) => `'${String(value).replace(/'/g, "\\'")}'`;
@@ -283,7 +343,9 @@ jobs:
           ssh -i ~/.ssh/deploy_key -p "$port" "$remote" \
             "install -d -m 700 $release_dir"
           scp -i ~/.ssh/deploy_key -P "$port" \
-            deploy/compose.production.yml deploy/deploy.sh app.env images.env \
+            deploy/compose.production.yml deploy/deploy.sh \
+            deploy/prometheus.yml deploy/content-publishing-alerts.yml \
+            app.env images.env \
             "$remote:$release_dir/"
 
       - name: Activate release

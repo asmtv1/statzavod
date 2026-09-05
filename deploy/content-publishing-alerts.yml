@@ -1,0 +1,122 @@
+groups:
+  - name: statzavod-content-publishing
+    rules:
+      - alert: ContentPublishingQueueBacklog
+        expr: sum(statzavod_content_publish_queue_depth) > 100
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: Content publishing queue is growing
+          description: More than 100 publishing jobs have remained due for 15 minutes.
+
+      - alert: ContentPublishingOldestDueJob
+        expr: max(statzavod_content_publish_oldest_due_seconds) > 600
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: A due publishing job is more than 10 minutes late
+          description: Check worker health, provider flags, and READY or RETRY_SCHEDULED jobs.
+
+      - alert: ContentPublishingFailureRatio
+        expr: |
+          (
+            sum(increase(statzavod_content_publish_results_total{result="failure"}[15m]))
+            /
+            clamp_min(sum(increase(statzavod_content_publish_results_total[15m])), 1)
+          ) > 0.20
+          and
+          sum(increase(statzavod_content_publish_results_total[15m])) > 5
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: Content publishing failure ratio exceeds 20 percent
+          description: More than five results were recorded and over 20 percent failed in the last 15 minutes.
+
+      - alert: ContentPublishingPartialResult
+        expr: sum(increase(statzavod_content_publish_results_total{result="partial"}[15m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: A content revision was only partially published
+          description: Inspect target attempts individually; do not repeat targets that already succeeded.
+
+      - alert: ContentPublishingRetrySpike
+        expr: sum(increase(statzavod_content_publish_retries_total[15m])) > 20
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Publishing retries are elevated
+          description: More than 20 retries were recorded in 15 minutes.
+
+      - alert: ContentProviderLatencyHigh
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le, platform) (rate(statzavod_content_provider_latency_seconds_bucket[15m]))
+          ) > 120
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: Provider publishing latency p95 exceeds two minutes
+          description: Check the affected provider and avoid manually duplicating in-flight operations.
+
+      - alert: ContentPublishingReauthRequired
+        expr: sum(statzavod_content_reauth_connections) > 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: Publishing connections require reauthentication
+          description: Reconnect the same external account identity before resuming its jobs.
+
+      - alert: ContentPublishingReauthStale
+        expr: max(statzavod_content_reauth_oldest_seconds) > 86400
+        for: 30m
+        labels:
+          severity: critical
+        annotations:
+          summary: A reauthentication request is older than 24 hours
+          description: Contact the workspace operator and keep affected targets paused.
+
+      - alert: ContentTranscodingFailure
+        expr: increase(statzavod_content_transcoding_failures_total[15m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Media validation or transcoding failed
+          description: Inspect redacted worker logs and the media rejection reason.
+
+      - alert: ContentOrphanUploadsPresent
+        expr: statzavod_content_orphan_uploads > 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: Expired multipart uploads require cleanup
+          description: Run the normal fenced cleanup path; do not delete READY referenced media.
+
+      - alert: ContentCleanupErrorsPresent
+        expr: statzavod_content_cleanup_errors > 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: Media cleanup tasks are failing
+          description: Inspect cleanup worker logs and retry through the regular task lease.
+
+      - alert: ContentProviderErrorSpike
+        expr: sum by (platform, error_class) (increase(statzavod_content_provider_errors_total[15m])) > 20
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Provider errors are elevated
+          description: A bounded provider error class exceeded 20 occurrences in 15 minutes.
+

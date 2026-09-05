@@ -34,9 +34,24 @@ func (s *Server) createInvitation(w http.ResponseWriter, r *http.Request) {
 	}
 	token := makeToken()
 	digest := sha256.Sum256([]byte(token))
-	_, err := s.pool.Exec(r.Context(), `INSERT INTO user_invitations(organization_id,email,role,token_hash,expires_at,created_by) VALUES($1,$2,$3,$4,now()+interval '24 hours',$5)`, p.OrganizationID, in.Email, in.Role, digest[:], p.ID)
+	tx, err := s.pool.Begin(r.Context())
+	if err != nil {
+		problem(w, http.StatusInternalServerError, "invitation failed", "could not start invitation creation")
+		return
+	}
+	defer tx.Rollback(r.Context())
+	var invitationID string
+	err = tx.QueryRow(r.Context(), `INSERT INTO user_invitations(organization_id,email,role,token_hash,expires_at,created_by) VALUES($1,$2,$3,$4,now()+interval '24 hours',$5) RETURNING id::text`, p.OrganizationID, in.Email, in.Role, digest[:], p.ID).Scan(&invitationID)
 	if err != nil {
 		problem(w, 500, "invitation failed", "could not create invitation")
+		return
+	}
+	if err = s.writeAudit(r.Context(), tx, requestAuditRecord(r, p, nil, "CREATE_INVITATION", "INVITATION", &invitationID, http.StatusCreated, map[string]any{"role": in.Role})); err != nil {
+		problem(w, http.StatusInternalServerError, "invitation failed", "could not write audit record")
+		return
+	}
+	if err = tx.Commit(r.Context()); err != nil {
+		problem(w, http.StatusInternalServerError, "invitation failed", "could not commit invitation creation")
 		return
 	}
 	acceptancePath := "/accept-invitation"
@@ -52,6 +67,7 @@ func (s *Server) createInvitation(w http.ResponseWriter, r *http.Request) {
 		}
 		delivery = "email"
 	}
+	markResponseAuditCommitted(w)
 	writeJSON(w, 201, map[string]any{"email": in.Email, "role": in.Role, "delivery": delivery, "expiresAt": time.Now().Add(24 * time.Hour), "acceptanceUrl": acceptanceURL})
 }
 
@@ -137,7 +153,7 @@ func (s *Server) acceptInvitation(w http.ResponseWriter, r *http.Request) {
 		Token    string `json:"token"`
 		Password string `json:"password"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.Token == "" || len(in.Password) < 12 {
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.Token == "" || !validPassword(in.Password) {
 		problem(w, 400, "invalid invitation", "token and a password of at least 12 characters are required")
 		return
 	}
@@ -160,9 +176,39 @@ func (s *Server) acceptInvitation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var userID string
-	err = tx.QueryRow(r.Context(), `INSERT INTO users(email,password_hash,role,status) VALUES($1,$2,$3,'ACTIVE') ON CONFLICT(email) DO UPDATE SET password_hash=excluded.password_hash,role=excluded.role,status='ACTIVE',updated_at=now() RETURNING id`, email, hash, role).Scan(&userID)
+	// Compatibility must not turn a legacy invitation into an account-takeover
+	// primitive. Global emails are unique; existing accounts are never updated
+	// or moved to another workspace by accepting an invitation.
+	err = tx.QueryRow(r.Context(), `INSERT INTO users(email,password_hash,role,status) VALUES($1,$2,$3,'ACTIVE') RETURNING id`, email, hash, role).Scan(&userID)
+	if isUniqueViolation(err) {
+		problem(w, http.StatusConflict, "email already in use", "email is already assigned to an account")
+		return
+	}
 	if err == nil {
 		_, err = tx.Exec(r.Context(), `INSERT INTO organization_memberships(organization_id,user_id,role) VALUES($1,$2,$3) ON CONFLICT(organization_id,user_id) DO UPDATE SET role=excluded.role`, orgID, userID, role)
+	}
+	// Preserve the legacy invitation's effective access for one release. New
+	// team management uses explicit per-company assignments through /users.
+	if err == nil && role != "ADMIN" {
+		_, err = tx.Exec(r.Context(), `
+			INSERT INTO manager_company_assignments(organization_id,manager_user_id,company_id)
+			SELECT $1,$2,c.id FROM companies c
+			WHERE c.organization_id=$1 AND c.archived_at IS NULL
+			ON CONFLICT(manager_user_id,company_id) DO NOTHING`, orgID, userID)
+	}
+	if err == nil && role != "ADMIN" {
+		_, err = tx.Exec(r.Context(), `
+			INSERT INTO manager_company_permissions(assignment_id,permission)
+			SELECT a.id,p.permission
+			FROM manager_company_assignments a
+			CROSS JOIN LATERAL unnest(
+				CASE $3::user_role
+					WHEN 'ANALYST' THEN ARRAY['STATS_VIEW','STATS_EXPORT','CREATOR_CREATE','CREATOR_EDIT','CREATOR_ARCHIVE','CREATOR_DELETE','CREATOR_ACCOUNT_MANAGE','SOCIAL_CONNECT','SYNC_MANAGE','CREDENTIAL_EDIT']::manager_permission[]
+					ELSE ARRAY['STATS_VIEW','STATS_EXPORT']::manager_permission[]
+				END
+			) p(permission)
+			WHERE a.organization_id=$1 AND a.manager_user_id=$2
+			ON CONFLICT(assignment_id,permission) DO NOTHING`, orgID, userID, role)
 	}
 	if err != nil || tx.Commit(r.Context()) != nil {
 		problem(w, 500, "invitation failed", "could not activate user")

@@ -115,12 +115,14 @@ func TestDeleteInstagramAccountDataOrdersSyncCleanupBeforeTarget(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantOrder := []string{
+		"SELECT id FROM platform_accounts",
 		"DELETE FROM sync_runs",
 		"DELETE FROM sync_targets",
+		"UPDATE content_publish_jobs",
+		"UPDATE content_publish_targets",
 		"DELETE FROM creator_account_assignments",
 		"DELETE FROM publications",
 		"DELETE FROM platform_accounts",
-		"INSERT INTO audit_logs",
 	}
 	if len(tx.queries) != len(wantOrder) {
 		t.Fatalf("query count = %d, want %d: %#v", len(tx.queries), len(wantOrder), tx.queries)
@@ -130,7 +132,7 @@ func TestDeleteInstagramAccountDataOrdersSyncCleanupBeforeTarget(t *testing.T) {
 			t.Fatalf("query %d = %q, want fragment %q", index, tx.queries[index], fragment)
 		}
 	}
-	if !strings.Contains(tx.queries[2], "account.organization_id=$2") || !strings.Contains(tx.queries[3], "organization_id=$2") || !strings.Contains(tx.queries[4], "organization_id=$2") {
+	if !strings.Contains(tx.queries[0], "organization_id=$2") || !strings.Contains(tx.queries[3], "job.organization_id=$1") || !strings.Contains(tx.queries[4], "target.organization_id=$1") || !strings.Contains(tx.queries[5], "account.organization_id=$2") || !strings.Contains(tx.queries[6], "organization_id=$2") || !strings.Contains(tx.queries[7], "organization_id=$2") {
 		t.Fatalf("tenant filters are missing from deletion queries: %#v", tx.queries)
 	}
 }
@@ -141,8 +143,8 @@ func TestDeleteInstagramAccountDataStopsBeforeAuditWhenAccountIsAbsent(t *testin
 	if !errors.Is(err, pgx.ErrNoRows) {
 		t.Fatalf("error = %v, want pgx.ErrNoRows", err)
 	}
-	if len(tx.queries) != 5 {
-		t.Fatalf("query count = %d, want 5 without audit insert: %#v", len(tx.queries), tx.queries)
+	if len(tx.queries) != 8 {
+		t.Fatalf("query count = %d, want 8 without audit insert: %#v", len(tx.queries), tx.queries)
 	}
 }
 

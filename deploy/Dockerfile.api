@@ -5,7 +5,7 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 go build -o /out/api ./cmd/api && CGO_ENABLED=0 go build -o /out/worker ./cmd/worker && CGO_ENABLED=0 go build -o /out/migrate ./cmd/migrate
 FROM alpine:3.22
-RUN adduser -D -u 10001 app
+RUN apk add --no-cache ffmpeg ca-certificates && adduser -D -u 10001 app
 WORKDIR /app
 COPY --from=build /out/ /usr/local/bin/
 COPY db/migrations ./db/migrations

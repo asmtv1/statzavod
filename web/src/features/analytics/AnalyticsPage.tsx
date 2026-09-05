@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
-import { api, type CreatorAnalytics } from '../../shared/api/client'
+import { api } from '../../shared/api/client'
 import { useI18n } from '../../shared/i18n/I18nProvider'
+import { useAccess } from '../../shared/access/AccessProvider'
 import { DailyPerformanceChart, PlatformBreakdownChart, type DailyAnalyticsPoint, type PlatformAnalyticsPoint } from './PerformanceCharts'
 import styles from './AnalyticsPage.module.scss'
 
@@ -13,10 +14,11 @@ const engagementRate = (views:number, likes:number, comments:number, shares:numb
 
 export function AnalyticsPage() {
   const { locale, t } = useI18n()
+  const { scopeKey } = useAccess()
   const number = new Intl.NumberFormat(locale === 'en' ? 'en-US' : 'ru-RU')
   const summaryMetricLabel = (key: typeof summaryMetrics[number]) => key === 'views' ? t('просмотров') : key === 'likes' ? t('реакций') : key === 'comments' ? t('комментариев') : key === 'shares' ? t('репостов') : t('публикаций')
-  const creators = useQuery({ queryKey:['creators', locale], queryFn:api.creators })
-  const companies = useQuery({ queryKey:['companies', locale], queryFn:api.companies })
+  const creators = useQuery({ queryKey:['creators', scopeKey, locale], queryFn:api.creators })
+  const companies = useQuery({ queryKey:['companies', scopeKey, locale], queryFn:api.companies })
   const [from,setFrom] = useState(monthAgo)
   const [to,setTo] = useState(today)
   const [selected,setSelected] = useState<string[]>([])

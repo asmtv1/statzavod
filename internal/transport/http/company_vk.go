@@ -16,7 +16,13 @@ func (s *Server) listCompanyVKAccounts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := r.Context().Value(principalKey).(principal)
-	rows, err := s.pool.Query(r.Context(), `SELECT a.id,a.company_id,c.name,a.login_ciphertext,a.login_nonce,a.phone_ciphertext,a.phone_nonce,a.updated_at,COALESCE(p.display_name,''),COALESCE(p.username,''),COALESCE(p.avatar_url,''),COALESCE(p.profile_url,''),COALESCE(o.status,''),COALESCE(p.id::text,''),p.last_synced_at,t.last_success_at,COALESCE(t.last_error,p.last_error,''),COALESCE(t.consecutive_failures,0),(SELECT count(*) FROM creator_vk_assignments v WHERE v.company_vk_account_id=a.id) FROM company_vk_accounts a JOIN companies c ON c.id=a.company_id LEFT JOIN platform_accounts p ON p.id=a.platform_account_id LEFT JOIN oauth_connections o ON o.platform_account_id=p.id LEFT JOIN LATERAL (SELECT last_success_at,last_error,consecutive_failures FROM sync_targets WHERE target_id=p.id AND operation='VK_IMPORT' ORDER BY (status='ACTIVE') DESC,next_sync_at DESC LIMIT 1) t ON true WHERE a.organization_id=$1 AND c.archived_at IS NULL ORDER BY c.name`, p.OrganizationID)
+	scopeSQL, scopeArgs, ok := managementCompanyScope(p, "a", 2)
+	if !ok {
+		problem(w, http.StatusForbidden, "forbidden", "an assigned active company is required")
+		return
+	}
+	args := append([]any{p.OrganizationID}, scopeArgs...)
+	rows, err := s.pool.Query(r.Context(), `SELECT a.id,a.company_id,c.name,a.login_ciphertext,a.login_nonce,a.phone_ciphertext,a.phone_nonce,a.updated_at,COALESCE(p.display_name,''),COALESCE(p.username,''),COALESCE(p.avatar_url,''),COALESCE(p.profile_url,''),COALESCE(o.status,''),COALESCE(p.id::text,''),p.last_synced_at,t.last_success_at,COALESCE(t.last_error,p.last_error,''),COALESCE(t.consecutive_failures,0),(SELECT count(*) FROM creator_vk_assignments v WHERE v.company_vk_account_id=a.id) FROM company_vk_accounts a JOIN companies c ON c.id=a.company_id AND c.organization_id=a.organization_id LEFT JOIN platform_accounts p ON p.id=a.platform_account_id AND p.organization_id=a.organization_id AND p.company_id=a.company_id LEFT JOIN oauth_connections o ON o.platform_account_id=p.id AND o.organization_id=a.organization_id LEFT JOIN LATERAL (SELECT last_success_at,last_error,consecutive_failures FROM sync_targets WHERE target_id=p.id AND organization_id=a.organization_id AND company_id=a.company_id AND operation='VK_IMPORT' ORDER BY (status='ACTIVE') DESC,next_sync_at DESC LIMIT 1) t ON true WHERE a.organization_id=$1 AND c.archived_at IS NULL`+scopeSQL+` ORDER BY c.name`, args...)
 	if err != nil {
 		problem(w, http.StatusInternalServerError, "VK accounts failed", "could not load company VK accounts")
 		return
@@ -217,7 +223,7 @@ func (s *Server) saveCompanyVKAccount(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	if _, err = tx.Exec(r.Context(), `INSERT INTO audit_logs(organization_id,actor_id,action,entity_type,entity_id,metadata) VALUES($1,$2,'UPDATE_VK_ACCOUNT','COMPANY',$3,jsonb_build_object('companyName',$4::text,'accountId',$5::text))`, p.OrganizationID, p.ID, companyID, companyName, accountID); err != nil {
+	if err = s.writeAudit(r.Context(), tx, requestAuditRecord(r, p, &companyID, "UPDATE_VK_ACCOUNT", "COMPANY", &companyID, http.StatusOK, map[string]any{"companyName": companyName, "accountId": accountID})); err != nil {
 		problem(w, http.StatusInternalServerError, "VK account save failed", "could not save audit record")
 		return
 	}
@@ -225,6 +231,7 @@ func (s *Server) saveCompanyVKAccount(w http.ResponseWriter, r *http.Request) {
 		problem(w, http.StatusInternalServerError, "VK account save failed", "could not commit VK account update")
 		return
 	}
+	markResponseAuditCommitted(w)
 	writeJSON(w, http.StatusOK, map[string]string{"id": accountID})
 }
 
@@ -255,7 +262,11 @@ func (s *Server) revealCompanyVKPassword(w http.ResponseWriter, r *http.Request)
 		problem(w, http.StatusInternalServerError, "reveal failed", "could not decrypt company VK password")
 		return
 	}
-	_, _ = s.pool.Exec(r.Context(), `INSERT INTO audit_logs(organization_id,actor_id,action,entity_type,entity_id,metadata) VALUES($1,$2,'REVEAL_COMPANY_VK_PASSWORD','COMPANY',$3,jsonb_build_object('accountId',$4::text))`, p.OrganizationID, p.ID, companyID, accountID)
+	if err = s.writeAudit(r.Context(), s.pool, requestAuditRecord(r, p, &companyID, "REVEAL_COMPANY_VK_PASSWORD", "COMPANY", &companyID, http.StatusOK, map[string]any{"accountId": accountID})); err != nil {
+		problem(w, http.StatusInternalServerError, "reveal failed", "could not write reveal audit record")
+		return
+	}
+	markResponseAuditCommitted(w)
 	writeJSON(w, http.StatusOK, map[string]string{"value": string(plain)})
 }
 
@@ -362,8 +373,8 @@ func (s *Server) saveCreatorVKAccess(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback(r.Context())
-	var oldAccountID, oldCompanyName, oldCommunityURL, oldRecipientAccountURL string
-	err = tx.QueryRow(r.Context(), `SELECT COALESCE(v.company_vk_account_id::text,''),COALESCE(c.name,''),COALESCE(v.community_url,''),COALESCE(v.recipient_account_url,'') FROM creators cr LEFT JOIN creator_vk_assignments v ON v.creator_id=cr.id LEFT JOIN company_vk_accounts a ON a.id=v.company_vk_account_id LEFT JOIN companies c ON c.id=a.company_id WHERE cr.id=$1 AND cr.organization_id=$2 FOR UPDATE OF cr`, creatorID, p.OrganizationID).Scan(&oldAccountID, &oldCompanyName, &oldCommunityURL, &oldRecipientAccountURL)
+	var creatorCompanyID, oldAccountID, oldCompanyName, oldCommunityURL, oldRecipientAccountURL string
+	err = tx.QueryRow(r.Context(), `SELECT cr.company_id,COALESCE(v.company_vk_account_id::text,''),COALESCE(c.name,''),COALESCE(v.community_url,''),COALESCE(v.recipient_account_url,'') FROM creators cr JOIN companies creator_company ON creator_company.id=cr.company_id AND creator_company.archived_at IS NULL LEFT JOIN creator_vk_assignments v ON v.creator_id=cr.id LEFT JOIN company_vk_accounts a ON a.id=v.company_vk_account_id LEFT JOIN companies c ON c.id=a.company_id WHERE cr.id=$1 AND cr.organization_id=$2 AND cr.archived_at IS NULL FOR UPDATE OF cr`, creatorID, p.OrganizationID).Scan(&creatorCompanyID, &oldAccountID, &oldCompanyName, &oldCommunityURL, &oldRecipientAccountURL)
 	if err == pgx.ErrNoRows {
 		problem(w, http.StatusNotFound, "not found", "creator does not exist")
 		return
@@ -374,8 +385,8 @@ func (s *Server) saveCreatorVKAccess(w http.ResponseWriter, r *http.Request) {
 	}
 	newCompanyName := ""
 	if accountID != "" {
-		if err = tx.QueryRow(r.Context(), `SELECT c.name FROM company_vk_accounts a JOIN companies c ON c.id=a.company_id WHERE a.id=$1 AND a.organization_id=$2 AND c.archived_at IS NULL`, accountID, p.OrganizationID).Scan(&newCompanyName); err == pgx.ErrNoRows {
-			problem(w, http.StatusBadRequest, "invalid VK access", "company VK account does not exist")
+		if err = tx.QueryRow(r.Context(), `SELECT c.name FROM company_vk_accounts a JOIN companies c ON c.id=a.company_id WHERE a.id=$1 AND a.organization_id=$2 AND a.company_id=$3 AND c.archived_at IS NULL FOR KEY SHARE OF a,c`, accountID, p.OrganizationID, creatorCompanyID).Scan(&newCompanyName); err == pgx.ErrNoRows {
+			problem(w, http.StatusNotFound, "not found", "company VK account is not available")
 			return
 		} else if err != nil {
 			problem(w, http.StatusInternalServerError, "VK access save failed", "could not validate company VK account")
@@ -383,10 +394,15 @@ func (s *Server) saveCreatorVKAccess(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if oldAccountID == accountID && oldCommunityURL == communityURL && oldRecipientAccountURL == recipientAccountURL {
+		if err = s.writeAudit(r.Context(), tx, requestAuditRecord(r, p, &creatorCompanyID, "UPDATE_VK_ACCESS", "CREATOR", &creatorID, http.StatusNoContent, map[string]any{"changed": false})); err != nil {
+			problem(w, http.StatusInternalServerError, "VK access save failed", "could not save audit record")
+			return
+		}
 		if err = tx.Commit(r.Context()); err != nil {
 			problem(w, http.StatusInternalServerError, "VK access save failed", "could not finish update")
 			return
 		}
+		markResponseAuditCommitted(w)
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -413,7 +429,11 @@ func (s *Server) saveCreatorVKAccess(w http.ResponseWriter, r *http.Request) {
 		problem(w, http.StatusInternalServerError, "VK access save failed", "could not save creator history")
 		return
 	}
-	if _, err = tx.Exec(r.Context(), `INSERT INTO audit_logs(organization_id,actor_id,action,entity_type,entity_id,metadata) VALUES($1,$2,'UPDATE_VK_ACCESS','CREATOR',$3,jsonb_build_object('companyVkAccountId',NULLIF($4::text,''),'communityUrl',NULLIF($5::text,''),'recipientAccountUrl',NULLIF($6::text,'')))`, p.OrganizationID, p.ID, creatorID, accountID, communityURL, recipientAccountURL); err != nil {
+	metadata := map[string]any{"communityUrl": communityURL, "recipientAccountUrl": recipientAccountURL}
+	if accountID != "" {
+		metadata["companyVkAccountId"] = accountID
+	}
+	if err = s.writeAudit(r.Context(), tx, requestAuditRecord(r, p, &creatorCompanyID, "UPDATE_VK_ACCESS", "CREATOR", &creatorID, http.StatusNoContent, metadata)); err != nil {
 		problem(w, http.StatusInternalServerError, "VK access save failed", "could not save audit record")
 		return
 	}
@@ -421,5 +441,6 @@ func (s *Server) saveCreatorVKAccess(w http.ResponseWriter, r *http.Request) {
 		problem(w, http.StatusInternalServerError, "VK access save failed", "could not commit update")
 		return
 	}
+	markResponseAuditCommitted(w)
 	w.WriteHeader(http.StatusNoContent)
 }

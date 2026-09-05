@@ -77,11 +77,7 @@ func (s *Server) syncInstagramAccount(ctx context.Context, job platformSyncJob, 
 	if err != nil {
 		return syncResult{}, err
 	}
-	metadata, _ := json.Marshal(map[string]any{"accountType": account.AccountType})
-	if _, err = s.pool.Exec(ctx, `
-		INSERT INTO account_metric_snapshots(platform_account_id,followers,follows,media_count,metadata)
-		VALUES($1,$2,$3,$4,$5::jsonb)
-	`, job.AccountID, account.FollowersCount, account.FollowsCount, account.MediaCount, string(metadata)); err != nil {
+	if err = s.saveInstagramAccountSnapshot(ctx, job, account); err != nil {
 		return syncResult{}, err
 	}
 	if err = s.refreshPlatformAccountProfile(ctx, job, platformProfile{
@@ -119,10 +115,29 @@ func (s *Server) syncInstagramAccount(ctx context.Context, job platformSyncJob, 
 		}
 		result.RecordsWritten++
 	}
-	if err := api.syncInstagramAccountInsights(ctx, client, accessToken, job.AccountID, account.ID, includeCollaborations); err != nil {
+	if err := api.syncInstagramAccountInsights(ctx, client, accessToken, job, account.ID, includeCollaborations); err != nil {
 		return result, err
 	}
 	return result, nil
+}
+
+func (s *Server) saveInstagramAccountSnapshot(ctx context.Context, job platformSyncJob, account instagramAccount) error {
+	metadata, _ := json.Marshal(map[string]any{"accountType": account.AccountType})
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = lockActivePlatformSyncJob(ctx, tx, job); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `
+		INSERT INTO account_metric_snapshots(platform_account_id,followers,follows,media_count,metadata)
+		VALUES($1,$2,$3,$4,$5::jsonb)
+	`, job.AccountID, account.FollowersCount, account.FollowsCount, account.MediaCount, string(metadata)); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func (s *Server) instagramAPIForAccount(ctx context.Context, accountID string) (*Server, bool, error) {
@@ -131,7 +146,9 @@ func (s *Server) instagramAPIForAccount(ctx context.Context, accountID string) (
 		return nil, false, err
 	}
 	var values map[string]any
-	_ = json.Unmarshal(metadata, &values)
+	if err := json.Unmarshal(metadata, &values); err != nil {
+		return nil, false, fmt.Errorf("decode instagram account metadata: %w", err)
+	}
 	if values["connectionMode"] != "FACEBOOK" {
 		return s, false, nil
 	}
@@ -295,8 +312,16 @@ func (s *Server) upsertInstagramMedia(ctx context.Context, job platformSyncJob, 
 		"mediaProductType":   media.MediaProductType,
 		"averageWatchTimeMs": metrics.AverageWatchTimeMS,
 	})
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback(ctx)
+	if err = lockActivePlatformSyncJob(ctx, tx, job); err != nil {
+		return "", err
+	}
 	var publicationID string
-	err = s.pool.QueryRow(ctx, `
+	err = tx.QueryRow(ctx, `
 		INSERT INTO publications(
 			organization_id,creator_id,platform_account_id,platform,external_id,
 			publication_type,title,description,permalink,thumbnail_url,published_at,metadata
@@ -312,12 +337,18 @@ func (s *Server) upsertInstagramMedia(ctx context.Context, job platformSyncJob, 
 	if err != nil {
 		return "", err
 	}
-	_, err = s.pool.Exec(ctx, `
+	_, err = tx.Exec(ctx, `
 		INSERT INTO publication_metric_snapshots(
 			publication_id,views,reach,likes,comments,shares,saves,watch_time_ms,completeness_status
 		) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'PARTIAL')
 	`, publicationID, metrics.Views, metrics.Reach, metrics.Likes, metrics.Comments, metrics.Shares, metrics.Saves, metrics.WatchTimeMS)
-	return publicationID, err
+	if err != nil {
+		return "", err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return "", err
+	}
+	return publicationID, nil
 }
 
 func parseInstagramTimestamp(value string) (time.Time, error) {
@@ -339,10 +370,17 @@ func parseInstagramTimestamp(value string) (time.Time, error) {
 	return time.Time{}, parseErr
 }
 
-func (s *Server) syncInstagramAccountInsights(ctx context.Context, client providerClient, accessToken, accountID, externalID string, facebookLogin bool) error {
+type instagramAccountDailyMetric struct {
+	Date   time.Time
+	Metric string
+	Value  int64
+}
+
+func (s *Server) syncInstagramAccountInsights(ctx context.Context, client providerClient, accessToken string, job platformSyncJob, externalID string, facebookLogin bool) error {
 	end := time.Now().UTC()
 	start := end.AddDate(0, 0, -30)
 	metrics := []string{"views", "reach", "accounts_engaged", "total_interactions", "follows_and_unfollows"}
+	dailyMetrics := make([]instagramAccountDailyMetric, 0, len(metrics)*31)
 	for _, metric := range metrics {
 		values := url.Values{
 			"metric":       {metric},
@@ -374,39 +412,51 @@ func (s *Server) syncInstagramAccountInsights(ctx context.Context, client provid
 				if parseErr != nil {
 					continue
 				}
-				if err := s.upsertInstagramAccountDailyMetric(ctx, accountID, date, metric, *value); err != nil {
-					return err
-				}
+				dailyMetrics = append(dailyMetrics, instagramAccountDailyMetric{Date: date, Metric: metric, Value: *value})
 			}
 		}
 	}
-	return nil
+	return s.upsertInstagramAccountDailyMetrics(ctx, job, dailyMetrics)
 }
 
-func (s *Server) upsertInstagramAccountDailyMetric(ctx context.Context, accountID string, date time.Time, metric string, value int64) error {
-	column := map[string]string{
-		"views":              "views",
-		"reach":              "reach",
-		"total_interactions": "interactions",
-	}[metric]
-	if column == "" {
-		metadata, _ := json.Marshal(map[string]int64{metric: value})
-		_, err := s.pool.Exec(ctx, `
-			INSERT INTO account_daily_metrics(platform_account_id,metric_date,metadata)
-			VALUES($1,$2,$3::jsonb)
-			ON CONFLICT(platform_account_id,metric_date) DO UPDATE SET
-				metadata=account_daily_metrics.metadata || excluded.metadata,updated_at=now()
-		`, accountID, date.Format("2006-01-02"), string(metadata))
+func (s *Server) upsertInstagramAccountDailyMetrics(ctx context.Context, job platformSyncJob, metrics []instagramAccountDailyMetric) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
 		return err
 	}
-	query := fmt.Sprintf(`
-		INSERT INTO account_daily_metrics(platform_account_id,metric_date,%s)
-		VALUES($1,$2,$3)
-		ON CONFLICT(platform_account_id,metric_date) DO UPDATE SET
-			%s=excluded.%s,updated_at=now()
-	`, column, column, column)
-	_, err := s.pool.Exec(ctx, query, accountID, date.Format("2006-01-02"), value)
-	return err
+	defer tx.Rollback(ctx)
+	if err = lockActivePlatformSyncJob(ctx, tx, job); err != nil {
+		return err
+	}
+	for _, metric := range metrics {
+		column := map[string]string{
+			"views":              "views",
+			"reach":              "reach",
+			"total_interactions": "interactions",
+		}[metric.Metric]
+		if column == "" {
+			metadata, _ := json.Marshal(map[string]int64{metric.Metric: metric.Value})
+			if _, err = tx.Exec(ctx, `
+				INSERT INTO account_daily_metrics(platform_account_id,metric_date,metadata)
+				VALUES($1,$2,$3::jsonb)
+				ON CONFLICT(platform_account_id,metric_date) DO UPDATE SET
+					metadata=account_daily_metrics.metadata || excluded.metadata,updated_at=now()
+			`, job.AccountID, metric.Date.Format("2006-01-02"), string(metadata)); err != nil {
+				return err
+			}
+			continue
+		}
+		query := fmt.Sprintf(`
+			INSERT INTO account_daily_metrics(platform_account_id,metric_date,%s)
+			VALUES($1,$2,$3)
+			ON CONFLICT(platform_account_id,metric_date) DO UPDATE SET
+				%s=excluded.%s,updated_at=now()
+		`, column, column, column)
+		if _, err = tx.Exec(ctx, query, job.AccountID, metric.Date.Format("2006-01-02"), metric.Value); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
 }
 
 func instagramInsightValue(response instagramInsightResponse) *int64 {

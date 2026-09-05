@@ -44,6 +44,19 @@ services:
       VK_OAUTH_CLIENT_SECRET: ${VK_OAUTH_CLIENT_SECRET}
       VK_OAUTH_REDIRECT_URL: ${VK_OAUTH_REDIRECT_URL:-https://statzavod.ru/api/v1/oauth/vk/callback}
       SMTP_URL: ${SMTP_URL:-}
+      CONTENT_PUBLISHING_ENABLED: ${CONTENT_PUBLISHING_ENABLED:-false}
+      CONTENT_TIKTOK_ENABLED: ${CONTENT_TIKTOK_ENABLED:-false}
+      CONTENT_INSTAGRAM_ENABLED: ${CONTENT_INSTAGRAM_ENABLED:-false}
+      CONTENT_YOUTUBE_ENABLED: ${CONTENT_YOUTUBE_ENABLED:-false}
+      CONTENT_VK_ENABLED: ${CONTENT_VK_ENABLED:-false}
+      MEDIA_S3_ENDPOINT: ${MEDIA_S3_ENDPOINT:-https://storage.yandexcloud.net}
+      MEDIA_S3_REGION: ${MEDIA_S3_REGION:-ru-central1}
+      MEDIA_S3_BUCKET: ${MEDIA_S3_BUCKET:-}
+      MEDIA_S3_ACCESS_KEY: ${MEDIA_S3_ACCESS_KEY:-}
+      MEDIA_S3_SECRET_KEY: ${MEDIA_S3_SECRET_KEY:-}
+      MEDIA_UPLOAD_ORIGIN: ${MEDIA_UPLOAD_ORIGIN:-https://storage.yandexcloud.net}
+      MEDIA_PUBLIC_BASE_URL: ${MEDIA_PUBLIC_BASE_URL:-}
+      MEDIA_DELIVERY_TOKEN_KEY: ${MEDIA_DELIVERY_TOKEN_KEY:-}
     depends_on: { postgres: { condition: service_healthy } }
 
   api:
@@ -65,11 +78,33 @@ services:
     environment: *app_env
     depends_on: { migrate: { condition: service_completed_successfully } }
 
+  prometheus:
+    image: prom/prometheus:v3.13.2
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=${PROMETHEUS_RETENTION_TIME:-15d}
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./content-publishing-alerts.yml:/etc/prometheus/content-publishing-alerts.yml:ro
+      - prometheus_data:/prometheus
+    depends_on:
+      api:
+        condition: service_healthy
+
   web:
     image: ${WEB_IMAGE:?set WEB_IMAGE}
     restart: unless-stopped
     environment:
+      APP_ENV: production
       SITE_ADDRESS: ${SITE_ADDRESS:-statzavod.ru, www.statzavod.ru}
+      MEDIA_SITE_ADDRESS: ${MEDIA_SITE_ADDRESS:-media.statzavod.ru}
+      CORS_ORIGIN: ${CORS_ORIGIN:-https://statzavod.ru}
+      CONTENT_PUBLISHING_ENABLED: ${CONTENT_PUBLISHING_ENABLED:-false}
+      MEDIA_S3_ENDPOINT: ${MEDIA_S3_ENDPOINT:-https://storage.yandexcloud.net}
+      MEDIA_UPLOAD_ORIGIN: ${MEDIA_UPLOAD_ORIGIN:-https://storage.yandexcloud.net}
+      MEDIA_S3_BUCKET: ${MEDIA_S3_BUCKET:-}
     ports: ["80:80", "443:443"]
     volumes: [caddy_data:/data, caddy_config:/config]
     depends_on: { api: { condition: service_healthy } }
@@ -78,3 +113,4 @@ volumes:
   postgres_data:
   caddy_data:
   caddy_config:
+  prometheus_data:

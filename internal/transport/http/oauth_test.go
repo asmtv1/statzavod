@@ -1,15 +1,105 @@
 package httpserver
 
 import (
+	"bytes"
+	"context"
+	"errors"
+	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/statzavod/statzavod/internal/config"
 	crypt "github.com/statzavod/statzavod/internal/crypto"
 )
+
+func TestOAuthRequestsRejectSameHostRedirectBeforeSecretsReachSink(t *testing.T) {
+	tests := []struct {
+		name string
+		run  func(string) error
+	}{
+		{name: "authorization code exchange", run: func(endpoint string) error {
+			return doOAuthForm(t.Context(), endpoint, url.Values{"code": {"code-canary"}, "client_secret": {"client-secret-canary"}}, &map[string]any{})
+		}},
+		{name: "bearer API", run: func(endpoint string) error {
+			return doBearerJSON(t.Context(), endpoint, "bearer-canary", &map[string]any{})
+		}},
+		{name: "query token API", run: func(endpoint string) error {
+			return doJSON(t.Context(), http.MethodGet, endpoint+"?access_token=query-token-canary", "", &map[string]any{})
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var sinkCalls atomic.Int32
+			mux := http.NewServeMux()
+			mux.HandleFunc("/start", func(w http.ResponseWriter, r *http.Request) {
+				http.Redirect(w, r, "/sink", http.StatusTemporaryRedirect)
+			})
+			mux.HandleFunc("/sink", func(w http.ResponseWriter, r *http.Request) {
+				sinkCalls.Add(1)
+				body, _ := io.ReadAll(r.Body)
+				if r.Header.Get("Authorization") != "" || len(body) != 0 || r.URL.Query().Get("access_token") != "" {
+					t.Errorf("redirect sink received OAuth credentials")
+				}
+			})
+			server := httptest.NewServer(mux)
+			defer server.Close()
+
+			if err := test.run(server.URL + "/start"); err == nil {
+				t.Fatal("same-host redirect was accepted")
+			}
+			if sinkCalls.Load() != 0 {
+				t.Fatalf("redirect sink received %d requests", sinkCalls.Load())
+			}
+		})
+	}
+}
+
+type oauthRoundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (fn oauthRoundTripperFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return fn(request)
+}
+
+func TestOAuthFailureLogNeverIncludesTransportSecrets(t *testing.T) {
+	oldTransport := http.DefaultTransport
+	http.DefaultTransport = oauthRoundTripperFunc(func(request *http.Request) (*http.Response, error) {
+		return nil, errors.New("signed request failed: " + request.URL.String() + " client_secret=secret-canary access_token=token-canary")
+	})
+	t.Cleanup(func() { http.DefaultTransport = oldTransport })
+
+	oldWriter := log.Writer()
+	oldFlags := log.Flags()
+	var output bytes.Buffer
+	log.SetOutput(&output)
+	log.SetFlags(0)
+	t.Cleanup(func() {
+		log.SetOutput(oldWriter)
+		log.SetFlags(oldFlags)
+	})
+
+	err := doJSON(t.Context(), http.MethodGet, "https://graph.example.test/me?access_token=query-canary&client_secret=url-secret-canary", "", &map[string]any{})
+	if err == nil {
+		t.Fatal("custom transport error was not returned")
+	}
+	logOAuthFailure("INSTAGRAM", "identity", err)
+	line := output.String()
+	for _, secret := range []string{"query-canary", "url-secret-canary", "secret-canary", "token-canary", "graph.example.test", "access_token", "client_secret"} {
+		if strings.Contains(line, secret) {
+			t.Fatalf("OAuth log leaked %q: %s", secret, line)
+		}
+	}
+	for _, field := range []string{`provider="INSTAGRAM"`, `phase="identity"`, `class="INTERNAL"`, "status=0", "correlation_id="} {
+		if !strings.Contains(line, field) {
+			t.Fatalf("OAuth diagnostic field %q is missing: %s", field, line)
+		}
+	}
+}
 
 func TestCompleteYouTubeOAuth(t *testing.T) {
 	mux := http.NewServeMux()
@@ -80,6 +170,13 @@ func TestCompleteInstagramOAuth(t *testing.T) {
 	if token.AccessToken != "long" || profile.ExternalID != "42" || profile.Username != "creator" {
 		t.Fatalf("unexpected result: %#v %#v", token, profile)
 	}
+	if len(token.Scopes) != 0 {
+		t.Fatalf("Instagram requested scopes must not be persisted as granted: %v", token.Scopes)
+	}
+	readiness := instagramPublishingReadiness(profile.AccountType, "", "ACTIVE", "ACTIVE", token.Scopes)
+	if readiness.Compatible || !readiness.Reauth || len(readiness.MissingScopes) != 1 || readiness.MissingScopes[0] != "instagram_business_content_publish" {
+		t.Fatalf("missing Instagram grant must fail publishing readiness: %#v", readiness)
+	}
 }
 
 func TestConfigureInstagramFacebookAuthorizationUsesConfigInsteadOfScope(t *testing.T) {
@@ -104,6 +201,67 @@ func TestConfigureInstagramLoginUsesScopes(t *testing.T) {
 
 	if query.Get("scope") != "instagram_business_basic,instagram_business_manage_insights" || query.Has("config_id") {
 		t.Fatalf("unexpected Instagram Login query: %s", query.Encode())
+	}
+}
+
+func TestPublishingOAuthProvidersRequestRequiredScopes(t *testing.T) {
+	providers := (&Server{}).oauthProviders()
+	tests := map[string][]string{
+		"instagram":          {"instagram_business_content_publish"},
+		"instagram-facebook": {"instagram_content_publish"},
+		"tiktok":             {"video.publish"},
+		"youtube":            {"https://www.googleapis.com/auth/youtube.upload"},
+		"vk":                 {"video", "wall", "groups"},
+	}
+	for key, want := range tests {
+		have := make(map[string]bool)
+		for _, scope := range providers[key].Scopes {
+			have[scope] = true
+		}
+		for _, scope := range want {
+			if !have[scope] {
+				t.Fatalf("%s OAuth scopes do not request %q: %v", key, scope, providers[key].Scopes)
+			}
+		}
+	}
+}
+
+func TestRequestedScopesAreNotProofOfGrantedScopes(t *testing.T) {
+	requested := []string{"https://www.googleapis.com/auth/youtube.readonly", "https://www.googleapis.com/auth/youtube.upload"}
+	granted := splitScopes("", requested)
+	if granted == nil || len(granted) != 0 {
+		t.Fatalf("missing token scope must be represented as a known empty grant set, got %#v", granted)
+	}
+
+	readiness := publishingReadiness("YOUTUBE", "account", "ACTIVE", "ACTIVE", granted)
+	if readiness.Compatible || !readiness.Reauth || len(readiness.MissingScopes) != 1 || readiness.MissingScopes[0] != "https://www.googleapis.com/auth/youtube.upload" {
+		t.Fatalf("unknown grants must fail publishing readiness: %#v", readiness)
+	}
+}
+
+func TestExplicitAndPartialGrantedScopesDriveReadiness(t *testing.T) {
+	explicit := splitScopes("https://www.googleapis.com/auth/youtube.readonly https://www.googleapis.com/auth/youtube.upload", nil)
+	if readiness := publishingReadiness("YOUTUBE", "account", "ACTIVE", "ACTIVE", explicit); !readiness.Compatible || readiness.Reauth || len(readiness.MissingScopes) != 0 {
+		t.Fatalf("explicit publishing grant must pass readiness: %#v", readiness)
+	}
+
+	partial := splitScopes("https://www.googleapis.com/auth/youtube.readonly", []string{"https://www.googleapis.com/auth/youtube.upload"})
+	readiness := publishingReadiness("YOUTUBE", "account", "ACTIVE", "ACTIVE", partial)
+	if readiness.Compatible || !readiness.Reauth || len(readiness.MissingScopes) != 1 || readiness.MissingScopes[0] != "https://www.googleapis.com/auth/youtube.upload" {
+		t.Fatalf("partial grant must report the exact missing publishing scope: %#v", readiness)
+	}
+}
+
+func TestScopeOmissionOnReconnectAndRefreshStaysFailClosed(t *testing.T) {
+	requested := []string{"video.publish", "user.info.basic"}
+	for _, phase := range []string{"reconnect", "refresh"} {
+		t.Run(phase, func(t *testing.T) {
+			granted := splitScopes("", requested)
+			readiness := publishingReadiness("TIKTOK", "account", "ACTIVE", "ACTIVE", granted)
+			if readiness.Compatible || !readiness.Reauth || len(readiness.MissingScopes) != 1 || readiness.MissingScopes[0] != "video.publish" {
+				t.Fatalf("%s without provider grant evidence became publish-ready: %#v", phase, readiness)
+			}
+		})
 	}
 }
 
@@ -295,12 +453,13 @@ func TestSelectionAccountsMarksExistingAssignments(t *testing.T) {
 		{Profile: platformProfile{ExternalID: "available", Username: "available", Metadata: map[string]any{"facebookPageName": "Available Page"}}},
 		{Profile: platformProfile{ExternalID: "current", Username: "current", Metadata: map[string]any{}}},
 		{Profile: platformProfile{ExternalID: "other", Username: "other", Metadata: map[string]any{}}},
+		{Profile: platformProfile{ExternalID: "invisible", Username: "provider-visible", Metadata: map[string]any{}}},
 	}
 	assignments := map[string]instagramAssignment{
 		"current": {CreatorID: "creator-1", CreatorName: "Current creator"},
 		"other":   {CreatorID: "creator-2", CreatorName: "Other creator"},
 	}
-	items := selectionAccounts(candidates, assignments, "creator-1")
+	items := selectionAccounts(candidates, assignments, map[string]struct{}{"invisible": {}}, "creator-1")
 	if items[0].ConnectionState != "AVAILABLE" || !items[0].Selectable || items[0].FacebookPageName != "Available Page" {
 		t.Fatalf("unexpected available item: %#v", items[0])
 	}
@@ -309,6 +468,9 @@ func TestSelectionAccountsMarksExistingAssignments(t *testing.T) {
 	}
 	if items[2].ConnectionState != "CONNECTED_ELSEWHERE" || items[2].Selectable || items[2].ConnectedCreator != "Other creator" {
 		t.Fatalf("unexpected assigned item: %#v", items[2])
+	}
+	if items[3].ConnectionState != "UNAVAILABLE" || items[3].Selectable || items[3].ConnectedCreator != "" {
+		t.Fatalf("cross-company item leaked assignment details: %#v", items[3])
 	}
 }
 
@@ -375,6 +537,13 @@ func TestCompleteVKOAuth(t *testing.T) {
 	}
 	if token.AccessToken != "access" || token.RefreshToken != "refresh" || profile.ExternalID != "7" || profile.Username != "ivan" {
 		t.Fatalf("unexpected result: %#v %#v", token, profile)
+	}
+	if len(token.Scopes) != 0 {
+		t.Fatalf("VK token response omitted scope but requested scopes were treated as granted: %v", token.Scopes)
+	}
+	readiness := publishingReadiness("VK", "account", "ACTIVE", "ACTIVE", token.Scopes)
+	if readiness.Compatible || !readiness.Reauth || len(readiness.MissingScopes) != 1 || readiness.MissingScopes[0] != "video" {
+		t.Fatalf("VK connection without granted-scope evidence must fail readiness: %#v", readiness)
 	}
 }
 
@@ -463,4 +632,166 @@ func TestRevokeInstagramFacebookTokenUsesFacebookGraph(t *testing.T) {
 	if err := s.revokePlatform(t.Context(), "INSTAGRAM", "facebook-user-token", true); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestDefaultLifecycleTokenRevokeUsesCorrectInstagramAPI(t *testing.T) {
+	tests := []struct {
+		name          string
+		facebookLogin bool
+		standardCalls int
+		facebookCalls int
+	}{
+		{name: "Instagram Login", standardCalls: 1},
+		{name: "Facebook Login", facebookLogin: true, facebookCalls: 1},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			standardCalls, facebookCalls := 0, 0
+			newProvider := func(counter *int) *httptest.Server {
+				return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					*counter++
+					if r.Method != http.MethodDelete || r.URL.Path != "/me/permissions" {
+						t.Fatalf("unexpected revoke request %s %s", r.Method, r.URL.Path)
+					}
+					if r.URL.Query().Get("access_token") != "provider-token" || r.URL.Query().Has("token") {
+						t.Fatalf("unexpected revoke query %s", r.URL.RawQuery)
+					}
+					if r.Header.Get("Content-Type") == "application/x-www-form-urlencoded" {
+						t.Fatal("Instagram revoke must not use the legacy form request")
+					}
+					writeJSON(w, http.StatusOK, map[string]any{"success": true})
+				}))
+			}
+			standard := newProvider(&standardCalls)
+			defer standard.Close()
+			facebook := newProvider(&facebookCalls)
+			defer facebook.Close()
+			s := &Server{config: config.Config{InstagramAPIBase: standard.URL, InstagramFacebookGraphAPIBase: facebook.URL}}
+			if err := s.defaultLifecycleTokenRevoke(t.Context(), "INSTAGRAM", "provider-token", test.facebookLogin); err != nil {
+				t.Fatal(err)
+			}
+			if standardCalls != test.standardCalls || facebookCalls != test.facebookCalls {
+				t.Fatalf("revoke calls standard=%d facebook=%d, want standard=%d facebook=%d", standardCalls, facebookCalls, test.standardCalls, test.facebookCalls)
+			}
+		})
+	}
+}
+
+func TestDefaultLifecycleVKRevokeRejectsRedirectBeforeSecretsReachSink(t *testing.T) {
+	tests := []struct {
+		name     string
+		status   int
+		sameHost bool
+	}{
+		{name: "301 cross host", status: http.StatusMovedPermanently},
+		{name: "302 same host", status: http.StatusFound, sameHost: true},
+		{name: "307 cross host", status: http.StatusTemporaryRedirect},
+		{name: "308 same host", status: http.StatusPermanentRedirect, sameHost: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			const (
+				token        = "vk-token-canary"
+				clientID     = "vk-client-id-canary"
+				clientSecret = "vk-client-secret-canary"
+			)
+			var sinkCalls atomic.Int32
+			var sinkBody atomic.Value
+			sink := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				sinkCalls.Add(1)
+				body, _ := io.ReadAll(r.Body)
+				sinkBody.Store(string(body))
+				w.WriteHeader(http.StatusNoContent)
+			}))
+			defer sink.Close()
+
+			mux := http.NewServeMux()
+			mux.HandleFunc("/oauth2/revoke", func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodPost {
+					t.Errorf("method = %s, want POST", r.Method)
+				}
+				if err := r.ParseForm(); err != nil {
+					t.Errorf("parse revoke form: %v", err)
+				}
+				if r.Form.Get("token") != token || r.Form.Get("client_id") != clientID || r.Form.Get("client_secret") != clientSecret {
+					t.Errorf("initial revoke request did not contain the expected credentials")
+				}
+				location := sink.URL + "/capture"
+				if test.sameHost {
+					location = "/sink"
+				}
+				w.Header().Set("Location", location)
+				w.WriteHeader(test.status)
+			})
+			mux.HandleFunc("/sink", func(w http.ResponseWriter, r *http.Request) {
+				sinkCalls.Add(1)
+				body, _ := io.ReadAll(r.Body)
+				sinkBody.Store(string(body))
+				w.WriteHeader(http.StatusNoContent)
+			})
+			provider := httptest.NewServer(mux)
+			defer provider.Close()
+
+			s := &Server{config: config.Config{
+				VKOAuthBase:    provider.URL,
+				VKClientID:     clientID,
+				VKClientSecret: clientSecret,
+			}}
+			err := s.defaultLifecycleTokenRevoke(t.Context(), "VK", token, false)
+			if !errors.Is(err, errProviderRedirect) {
+				t.Fatalf("error = %v, want redirect rejection", err)
+			}
+			if err.Error() != errProviderRedirect.Error() {
+				t.Fatalf("redirect error exposed request metadata: %q", err)
+			}
+			for _, secret := range []string{token, clientID, clientSecret, provider.URL, sink.URL} {
+				if strings.Contains(err.Error(), secret) {
+					t.Fatalf("redirect error leaked %q: %q", secret, err)
+				}
+			}
+			if calls := sinkCalls.Load(); calls != 0 {
+				body, _ := sinkBody.Load().(string)
+				t.Fatalf("redirect sink received %d requests with body %q", calls, body)
+			}
+		})
+	}
+}
+
+func TestDefaultLifecycleVKRevokeSuccessAndTimeout(t *testing.T) {
+	t.Run("success", func(t *testing.T) {
+		provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodPost || r.URL.Path != "/oauth2/revoke" {
+				t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+			}
+			if err := r.ParseForm(); err != nil {
+				t.Fatal(err)
+			}
+			if r.Form.Get("token") != "token" || r.Form.Get("client_id") != "client" || r.Form.Get("client_secret") != "secret" {
+				t.Fatalf("unexpected revoke form fields")
+			}
+			w.WriteHeader(http.StatusNoContent)
+		}))
+		defer provider.Close()
+
+		s := &Server{config: config.Config{VKOAuthBase: provider.URL, VKClientID: "client", VKClientSecret: "secret"}}
+		if err := s.defaultLifecycleTokenRevoke(t.Context(), "VK", "token", false); err != nil {
+			t.Fatalf("successful revoke: %v", err)
+		}
+	})
+
+	t.Run("context timeout", func(t *testing.T) {
+		provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			time.Sleep(150 * time.Millisecond)
+			w.WriteHeader(http.StatusNoContent)
+		}))
+		defer provider.Close()
+
+		ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+		defer cancel()
+		s := &Server{config: config.Config{VKOAuthBase: provider.URL}}
+		err := s.defaultLifecycleTokenRevoke(ctx, "VK", "token", false)
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("error = %v, want context deadline exceeded", err)
+		}
+	})
 }

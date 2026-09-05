@@ -1,16 +1,18 @@
 import { useQuery } from '@tanstack/react-query'
 import { api } from '../../shared/api/client'
 import { useI18n } from '../../shared/i18n/I18nProvider'
+import { useAccess } from '../../shared/access/AccessProvider'
 import styles from './Dashboard.module.scss'
 import { ViewsChart } from './ViewsChart'
 
 export function Dashboard() {
   const { locale, t } = useI18n()
+  const { scopeKey } = useAccess()
   const formatter = new Intl.NumberFormat(locale === 'en' ? 'en-US' : 'ru-RU')
-  const summary = useQuery({ queryKey: ['summary', locale], queryFn: api.summary })
-  const creators = useQuery({ queryKey: ['creators', locale], queryFn: api.creators })
-  const sync = useQuery({ queryKey: ['sync-health', locale], queryFn: api.syncHealth })
-  const timeseries = useQuery({ queryKey: ['timeseries', locale], queryFn: api.timeseries })
+  const summary = useQuery({ queryKey: ['summary', scopeKey, locale], queryFn: api.summary })
+  const creators = useQuery({ queryKey: ['creators', scopeKey, locale], queryFn: api.creators })
+  const sync = useQuery({ queryKey: ['sync-health', scopeKey, locale], queryFn: api.syncHealth })
+  const timeseries = useQuery({ queryKey: ['timeseries', scopeKey, locale], queryFn: api.timeseries })
 
   if (summary.isPending) return <div className={styles.loading}>{t('Загружаем статистику…')}</div>
   if (summary.isError) return <div className={styles.error}>{t('Не удалось загрузить дашборд:')} {t(summary.error.message)}</div>

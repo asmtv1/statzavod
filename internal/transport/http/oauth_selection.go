@@ -44,10 +44,26 @@ func (s *Server) createInstagramAccountSelection(ctx context.Context, organizati
 	if err != nil {
 		return "", err
 	}
-	_, _ = s.pool.Exec(ctx, `DELETE FROM oauth_account_selections WHERE expires_at<now() OR consumed_at<now()-interval '1 day'`)
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback(ctx)
+	if _, err = lockActiveCreatorCompanyTarget(ctx, tx, organizationID, creatorID); err != nil {
+		return "", err
+	}
+	if _, err = tx.Exec(ctx, `DELETE FROM oauth_account_selections WHERE expires_at<now() OR consumed_at<now()-interval '1 day'`); err != nil {
+		return "", err
+	}
 	var selectionID string
-	err = s.pool.QueryRow(ctx, `INSERT INTO oauth_account_selections(organization_id,creator_id,initiated_by,platform,payload_ciphertext,nonce,expires_at) VALUES($1,$2,$3,'INSTAGRAM',$4,$5,now()+interval '10 minutes') RETURNING id`, organizationID, creatorID, initiatedBy, ciphertext, nonce).Scan(&selectionID)
-	return selectionID, err
+	err = tx.QueryRow(ctx, `INSERT INTO oauth_account_selections(organization_id,creator_id,initiated_by,platform,payload_ciphertext,nonce,expires_at) VALUES($1,$2,$3,'INSTAGRAM',$4,$5,now()+interval '10 minutes') RETURNING id`, organizationID, creatorID, initiatedBy, ciphertext, nonce).Scan(&selectionID)
+	if err != nil {
+		return "", err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return "", err
+	}
+	return selectionID, nil
 }
 
 func validSelectionID(value string) bool {
@@ -93,16 +109,17 @@ func instagramCandidateIDs(candidates []instagramFacebookCandidate) []string {
 	return ids
 }
 
-func loadInstagramAssignments(ctx context.Context, queryer pgxQueryer, organizationID string, externalIDs []string, lock bool) (map[string]instagramAssignment, error) {
+func loadInstagramAssignments(ctx context.Context, queryer pgxQueryer, organizationID string, allowedCompanyIDs, externalIDs []string, lock bool) (map[string]instagramAssignment, error) {
 	query := `SELECT account.external_id,assignment.creator_id,COALESCE(creator.display_name,'')
 		FROM platform_accounts account
 		JOIN creator_account_assignments assignment ON assignment.platform_account_id=account.id AND assignment.valid_to IS NULL
 		JOIN creators creator ON creator.id=assignment.creator_id
-		WHERE account.organization_id=$1 AND account.platform='INSTAGRAM' AND account.external_id=ANY($2::text[]) AND account.status<>'DISCONNECTED'`
+		WHERE account.organization_id=$1 AND account.company_id=ANY($2::uuid[])
+		  AND account.platform='INSTAGRAM' AND account.external_id=ANY($3::text[]) AND account.status<>'DISCONNECTED'`
 	if lock {
 		query += ` FOR UPDATE OF account`
 	}
-	rows, err := queryer.Query(ctx, query, organizationID, externalIDs)
+	rows, err := queryer.Query(ctx, query, organizationID, allowedCompanyIDs, externalIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -119,13 +136,39 @@ func loadInstagramAssignments(ctx context.Context, queryer pgxQueryer, organizat
 	return assignments, rows.Err()
 }
 
-func selectionAccounts(candidates []instagramFacebookCandidate, assignments map[string]instagramAssignment, creatorID string) []instagramSelectionAccount {
+func loadInstagramUnavailableAccountIDs(ctx context.Context, queryer pgxQueryer, organizationID string, allowedCompanyIDs, externalIDs []string, lock bool) (map[string]struct{}, error) {
+	query := `SELECT external_id FROM platform_accounts
+		WHERE organization_id=$1 AND platform='INSTAGRAM' AND external_id=ANY($3::text[])
+		  AND company_id<>ALL($2::uuid[]) AND status<>'DISCONNECTED'`
+	if lock {
+		query += ` FOR UPDATE`
+	}
+	rows, err := queryer.Query(ctx, query, organizationID, allowedCompanyIDs, externalIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	unavailable := make(map[string]struct{})
+	for rows.Next() {
+		var externalID string
+		if err = rows.Scan(&externalID); err != nil {
+			return nil, err
+		}
+		unavailable[externalID] = struct{}{}
+	}
+	return unavailable, rows.Err()
+}
+
+func selectionAccounts(candidates []instagramFacebookCandidate, assignments map[string]instagramAssignment, unavailable map[string]struct{}, creatorID string) []instagramSelectionAccount {
 	items := make([]instagramSelectionAccount, 0, len(candidates))
 	for _, candidate := range candidates {
 		state := "AVAILABLE"
 		selectable := true
 		connectedCreator := ""
-		if assignment, ok := assignments[candidate.Profile.ExternalID]; ok {
+		if _, blocked := unavailable[candidate.Profile.ExternalID]; blocked {
+			state = "UNAVAILABLE"
+			selectable = false
+		} else if assignment, ok := assignments[candidate.Profile.ExternalID]; ok {
 			connectedCreator = assignment.CreatorName
 			if assignment.CreatorID == creatorID {
 				state = "CONNECTED_HERE"
@@ -153,12 +196,23 @@ func (s *Server) getInstagramAccountSelection(w http.ResponseWriter, r *http.Req
 		problem(w, http.StatusGone, "selection expired", localized(r, "Выбор аккаунтов устарел. Запустите подключение ещё раз.", "The account selection has expired. Start the connection again."))
 		return
 	}
-	assignments, err := loadInstagramAssignments(r.Context(), s.pool, p.OrganizationID, instagramCandidateIDs(candidates), false)
+	companyID, scopeErr := s.resourceCompanyID(r.Context(), p, "creator", creatorID)
+	if scopeErr != nil {
+		problem(w, http.StatusNotFound, "creator not found", "creator does not exist")
+		return
+	}
+	allowedCompanyIDs := p.oauthSelectionCompanyIDs(companyID)
+	assignments, err := loadInstagramAssignments(r.Context(), s.pool, p.OrganizationID, allowedCompanyIDs, instagramCandidateIDs(candidates), false)
 	if err != nil {
 		problem(w, http.StatusInternalServerError, "selection failed", localized(r, "Не удалось проверить найденные аккаунты.", "Could not check the discovered accounts."))
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": selectionAccounts(candidates, assignments, creatorID), "expiresAt": expiresAt})
+	unavailable, err := loadInstagramUnavailableAccountIDs(r.Context(), s.pool, p.OrganizationID, allowedCompanyIDs, instagramCandidateIDs(candidates), false)
+	if err != nil {
+		problem(w, http.StatusInternalServerError, "selection failed", localized(r, "Не удалось проверить область найденных аккаунтов.", "Could not scope the discovered accounts."))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": selectionAccounts(candidates, assignments, unavailable, creatorID), "expiresAt": expiresAt})
 }
 
 func (s *Server) completeInstagramAccountSelection(w http.ResponseWriter, r *http.Request) {
@@ -186,9 +240,21 @@ func (s *Server) completeInstagramAccountSelection(w http.ResponseWriter, r *htt
 		return
 	}
 	defer tx.Rollback(r.Context())
+	if _, err = lockActiveCreatorCompanyTarget(r.Context(), tx, p.OrganizationID, creatorID); errors.Is(err, errOAuthTargetUnavailable) {
+		problem(w, http.StatusNotFound, "creator not found", "creator does not exist in an active company")
+		return
+	} else if err != nil {
+		problem(w, http.StatusInternalServerError, "selection failed", localized(r, "Не удалось проверить активную компанию.", "Could not validate the active company."))
+		return
+	}
 	candidates, _, err := s.loadInstagramSelection(r.Context(), p.OrganizationID, creatorID, p.ID, selectionID, true, tx)
 	if err != nil {
 		problem(w, http.StatusGone, "selection expired", localized(r, "Выбор аккаунтов устарел. Запустите подключение ещё раз.", "The account selection has expired. Start the connection again."))
+		return
+	}
+	var companyID string
+	if err = tx.QueryRow(r.Context(), `SELECT company_id FROM creators WHERE id=$1 AND organization_id=$2`, creatorID, p.OrganizationID).Scan(&companyID); err != nil {
+		problem(w, http.StatusNotFound, "creator not found", "creator does not exist")
 		return
 	}
 	available := make(map[string]instagramFacebookCandidate, len(candidates))
@@ -201,7 +267,17 @@ func (s *Server) completeInstagramAccountSelection(w http.ResponseWriter, r *htt
 			return
 		}
 	}
-	assignments, err := loadInstagramAssignments(r.Context(), tx, p.OrganizationID, in.AccountIDs, true)
+	allowedCompanyIDs := p.oauthSelectionCompanyIDs(companyID)
+	unavailable, err := loadInstagramUnavailableAccountIDs(r.Context(), tx, p.OrganizationID, allowedCompanyIDs, in.AccountIDs, true)
+	if err != nil {
+		problem(w, http.StatusInternalServerError, "selection failed", localized(r, "Не удалось проверить область выбранных аккаунтов.", "Could not scope the selected accounts."))
+		return
+	}
+	if len(unavailable) != 0 {
+		problem(w, http.StatusNotFound, "account not found", localized(r, "Один или несколько аккаунтов недоступны в активной компании.", "One or more accounts are unavailable in the active company."))
+		return
+	}
+	assignments, err := loadInstagramAssignments(r.Context(), tx, p.OrganizationID, allowedCompanyIDs, in.AccountIDs, true)
 	if err != nil {
 		problem(w, http.StatusInternalServerError, "selection failed", localized(r, "Не удалось проверить выбранные аккаунты.", "Could not check the selected accounts."))
 		return
@@ -228,9 +304,25 @@ func (s *Server) completeInstagramAccountSelection(w http.ResponseWriter, r *htt
 		problem(w, http.StatusInternalServerError, "selection failed", localized(r, "Не удалось завершить подключение аккаунтов.", "Could not finish connecting the accounts."))
 		return
 	}
+	if err = s.writeAudit(r.Context(), tx, requestAuditRecord(r, p, &companyID, "COMPLETE_INSTAGRAM_ACCOUNT_SELECTION", "CREATOR", &creatorID, http.StatusOK, map[string]any{"connected": connected, "selectionId": selectionID})); err != nil {
+		problem(w, http.StatusInternalServerError, "selection failed", localized(r, "Не удалось записать аудит подключения.", "Could not audit the account connection."))
+		return
+	}
 	if err = tx.Commit(r.Context()); err != nil {
 		problem(w, http.StatusInternalServerError, "connection failed", localized(r, "Не удалось сохранить выбранные аккаунты.", "Could not save the selected accounts."))
 		return
 	}
+	// The selected candidates were identity-verified by Facebook before their
+	// encrypted Page tokens were bound. Wake only their own waiting targets.
+	for _, candidate := range candidates {
+		if _, ok := selected[candidate.Profile.ExternalID]; !ok {
+			continue
+		}
+		if err = s.resumeVerifiedOAuthReconnect(r.Context(), p.OrganizationID, provider.ID, candidate.Profile.ExternalID); err != nil {
+			problem(w, http.StatusInternalServerError, "connection failed", localized(r, "Подключение сохранено, но не удалось возобновить публикацию.", "The connection was saved, but publishing could not be resumed."))
+			return
+		}
+	}
+	markResponseAuditCommitted(w)
 	writeJSON(w, http.StatusOK, map[string]int{"connected": connected})
 }

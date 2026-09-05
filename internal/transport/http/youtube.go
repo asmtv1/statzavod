@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 type youtubeChannel struct {
@@ -90,7 +92,7 @@ func (s *Server) syncYouTubeAccount(ctx context.Context, job platformSyncJob, ac
 	if err := s.refreshPlatformAccountProfile(ctx, job, youtubeChannelProfile(channel)); err != nil {
 		return syncResult{}, err
 	}
-	if err := s.saveYouTubeAccountSnapshot(ctx, job.AccountID, channel); err != nil {
+	if err := s.saveYouTubeAccountSnapshot(ctx, job, channel); err != nil {
 		return syncResult{}, err
 	}
 
@@ -119,7 +121,7 @@ func (s *Server) syncYouTubeAccount(ctx context.Context, job platformSyncJob, ac
 		}
 	}
 
-	if err := s.syncYouTubeAnalytics(ctx, client, accessToken, job.AccountID, publicationIDs); err != nil {
+	if err := s.syncYouTubeAnalytics(ctx, client, accessToken, job, publicationIDs); err != nil {
 		return result, err
 	}
 	return result, nil
@@ -195,19 +197,46 @@ func (s *Server) fetchYouTubeVideos(ctx context.Context, client providerClient, 
 	return response.Items, nil
 }
 
-func (s *Server) saveYouTubeAccountSnapshot(ctx context.Context, accountID string, channel youtubeChannel) error {
+func (s *Server) saveYouTubeAccountSnapshot(ctx context.Context, job platformSyncJob, channel youtubeChannel) error {
 	metadata, _ := json.Marshal(map[string]any{
 		"channelId":    channel.ID,
 		"channelViews": parseInt64(channel.Statistics.ViewCount),
 	})
-	_, err := s.pool.Exec(ctx, `
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = lockActivePlatformSyncJob(ctx, tx, job); err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx, `
 		INSERT INTO account_metric_snapshots(platform_account_id,followers,media_count,views,metadata)
 		VALUES($1,$2,$3,$4,$5::jsonb)
-	`, accountID, parseInt64(channel.Statistics.SubscriberCount), parseInt64(channel.Statistics.VideoCount), parseInt64(channel.Statistics.ViewCount), string(metadata))
-	return err
+	`, job.AccountID, parseInt64(channel.Statistics.SubscriberCount), parseInt64(channel.Statistics.VideoCount), parseInt64(channel.Statistics.ViewCount), string(metadata))
+	if err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func (s *Server) upsertYouTubeVideo(ctx context.Context, job platformSyncJob, video youtubeVideo) (string, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback(ctx)
+	publicationID, err := s.upsertYouTubeVideoTx(ctx, tx, job, video)
+	if err != nil {
+		return "", err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return "", err
+	}
+	return publicationID, nil
+}
+
+func (s *Server) upsertYouTubeVideoTx(ctx context.Context, tx pgx.Tx, job platformSyncJob, video youtubeVideo) (string, error) {
 	publishedAt, err := time.Parse(time.RFC3339, video.Snippet.PublishedAt)
 	if err != nil {
 		return "", &providerError{Platform: "YouTube", Kind: providerSchema, Message: "video publication date is invalid"}
@@ -221,8 +250,11 @@ func (s *Server) upsertYouTubeVideo(ctx context.Context, job platformSyncJob, vi
 	}
 	duration := parseISO8601Duration(video.ContentDetails.Duration)
 	metadata, _ := json.Marshal(map[string]any{"privacyStatus": video.Status.PrivacyStatus})
+	if err = lockActivePlatformSyncJob(ctx, tx, job); err != nil {
+		return "", err
+	}
 	var publicationID string
-	err = s.pool.QueryRow(ctx, `
+	err = tx.QueryRow(ctx, `
 		INSERT INTO publications(
 			organization_id,creator_id,platform_account_id,platform,external_id,
 			publication_type,title,description,permalink,thumbnail_url,duration_ms,published_at,metadata
@@ -238,14 +270,14 @@ func (s *Server) upsertYouTubeVideo(ctx context.Context, job platformSyncJob, vi
 	if err != nil {
 		return "", err
 	}
-	_, err = s.pool.Exec(ctx, `
+	_, err = tx.Exec(ctx, `
 		INSERT INTO publication_metric_snapshots(publication_id,views,likes,comments,completeness_status)
 		VALUES($1,$2,$3,$4,'PARTIAL')
 	`, publicationID, parseInt64(video.Statistics.ViewCount), parseInt64(video.Statistics.LikeCount), parseInt64(video.Statistics.CommentCount))
 	return publicationID, err
 }
 
-func (s *Server) syncYouTubeAnalytics(ctx context.Context, client providerClient, accessToken, accountID string, publicationIDs map[string]string) error {
+func (s *Server) syncYouTubeAnalytics(ctx context.Context, client providerClient, accessToken string, job platformSyncJob, publicationIDs map[string]string) error {
 	end := time.Now().UTC().AddDate(0, 0, -1)
 	start := end.AddDate(0, 0, -30)
 	common := url.Values{
@@ -262,7 +294,7 @@ func (s *Server) syncYouTubeAnalytics(ctx context.Context, client providerClient
 	if err := client.JSON(ctx, http.MethodGet, endpoint, accessToken, "", nil, &accountReport); err != nil {
 		return err
 	}
-	if err := s.saveYouTubeAccountDaily(ctx, accountID, accountReport); err != nil {
+	if err := s.saveYouTubeAccountDaily(ctx, job, accountReport); err != nil {
 		return err
 	}
 
@@ -284,37 +316,53 @@ func (s *Server) syncYouTubeAnalytics(ctx context.Context, client providerClient
 		if err := client.JSON(ctx, http.MethodGet, endpoint, accessToken, "", nil, &report); err != nil {
 			return err
 		}
-		if err := s.saveYouTubePublicationDaily(ctx, publicationIDs, report); err != nil {
+		if err := s.saveYouTubePublicationDaily(ctx, job, publicationIDs, report); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (s *Server) saveYouTubeAccountDaily(ctx context.Context, accountID string, report youtubeAnalyticsReport) error {
+func (s *Server) saveYouTubeAccountDaily(ctx context.Context, job platformSyncJob, report youtubeAnalyticsReport) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = lockActivePlatformSyncJob(ctx, tx, job); err != nil {
+		return err
+	}
 	columns := youtubeColumnIndex(report)
 	for _, row := range report.Rows {
 		date, ok := youtubeString(row, youtubeIndex(columns, "day"))
 		if !ok {
 			continue
 		}
-		_, err := s.pool.Exec(ctx, `
+		_, err = tx.Exec(ctx, `
 			INSERT INTO account_daily_metrics(platform_account_id,metric_date,views,likes,comments,shares,watch_time_ms)
 			VALUES($1,$2,$3,$4,$5,$6,$7)
 			ON CONFLICT(platform_account_id,metric_date) DO UPDATE SET
 				views=excluded.views,likes=excluded.likes,comments=excluded.comments,
 				shares=excluded.shares,watch_time_ms=excluded.watch_time_ms,updated_at=now()
-		`, accountID, date, youtubeInt(row, youtubeIndex(columns, "views")), youtubeInt(row, youtubeIndex(columns, "likes")),
+		`, job.AccountID, date, youtubeInt(row, youtubeIndex(columns, "views")), youtubeInt(row, youtubeIndex(columns, "likes")),
 			youtubeInt(row, youtubeIndex(columns, "comments")), youtubeInt(row, youtubeIndex(columns, "shares")),
 			youtubeInt(row, youtubeIndex(columns, "estimatedMinutesWatched"))*60_000)
 		if err != nil {
 			return err
 		}
 	}
-	return nil
+	return tx.Commit(ctx)
 }
 
-func (s *Server) saveYouTubePublicationDaily(ctx context.Context, publicationIDs map[string]string, report youtubeAnalyticsReport) error {
+func (s *Server) saveYouTubePublicationDaily(ctx context.Context, job platformSyncJob, publicationIDs map[string]string, report youtubeAnalyticsReport) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = lockActivePlatformSyncJob(ctx, tx, job); err != nil {
+		return err
+	}
 	columns := youtubeColumnIndex(report)
 	for _, row := range report.Rows {
 		date, dateOK := youtubeString(row, youtubeIndex(columns, "day"))
@@ -323,7 +371,7 @@ func (s *Server) saveYouTubePublicationDaily(ctx context.Context, publicationIDs
 		if !dateOK || !videoOK || !known {
 			continue
 		}
-		_, err := s.pool.Exec(ctx, `
+		_, err = tx.Exec(ctx, `
 			INSERT INTO publication_daily_metrics(publication_id,metric_date,views,likes,comments,shares,watch_time_ms)
 			VALUES($1,$2,$3,$4,$5,$6,$7)
 			ON CONFLICT(publication_id,metric_date) DO UPDATE SET
@@ -336,7 +384,7 @@ func (s *Server) saveYouTubePublicationDaily(ctx context.Context, publicationIDs
 			return err
 		}
 	}
-	return nil
+	return tx.Commit(ctx)
 }
 
 func youtubeColumnIndex(report youtubeAnalyticsReport) map[string]int {

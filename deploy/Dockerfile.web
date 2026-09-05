@@ -7,4 +7,8 @@ RUN npm run build
 FROM caddy:2.10-alpine
 COPY --from=build /app/dist /usr/share/caddy
 COPY deploy/Caddyfile /etc/caddy/Caddyfile
+COPY deploy/validate-production-config.sh /usr/local/bin/validate-production-config
+RUN chmod 755 /usr/local/bin/validate-production-config
+ENTRYPOINT ["/usr/local/bin/validate-production-config"]
+CMD ["caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]
 EXPOSE 80

@@ -57,6 +57,10 @@ trap rollback ERR
 
 compose_release "$release_dir" config --quiet
 compose_release "$release_dir" pull
+# Validate through Compose so app.env is parsed by Compose rather than sourced
+# as shell code. The same validator is the web image entrypoint at startup.
+compose_release "$release_dir" run --rm --no-deps \
+  --entrypoint /usr/local/bin/validate-production-config web
 compose_release "$release_dir" up -d --remove-orphans --wait --wait-timeout 180
 
 curl \

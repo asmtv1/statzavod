@@ -1,18 +1,21 @@
 import { useMutation, useQuery } from '@tanstack/react-query'
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { api, type Platform, type Publication, type SyncAccount } from '../../shared/api/client'
+import { api, safePublicationPermalink, type Platform, type Publication, type SyncAccount } from '../../shared/api/client'
 import { useI18n } from '../../shared/i18n/I18nProvider'
+import { useAccess } from '../../shared/access/AccessProvider'
+import { useDialogFocus } from '../../shared/ui/dialogFocus'
 import styles from './OperationsPage.module.scss'
 
 export function PublicationsPage() {
   const { locale, t } = useI18n()
+  const { scopeKey } = useAccess()
   const [companyFilter,setCompanyFilter] = useState('ALL')
   const [creatorFilter,setCreatorFilter] = useState('ALL')
   const [platformFilter,setPlatformFilter] = useState<'ALL'|Platform>('ALL')
   const [selected,setSelected] = useState<string[]>([])
-  const result=useQuery({queryKey:['publications', locale],queryFn:api.publications})
-  const companies=useQuery({queryKey:['companies', locale],queryFn:api.companies})
+  const result=useQuery({queryKey:['publications', scopeKey, locale],queryFn:api.publications})
+  const companies=useQuery({queryKey:['companies', scopeKey, locale],queryFn:api.companies})
   const allItems = result.data?.items ?? []
   const formatter = new Intl.NumberFormat(locale === 'en' ? 'en-US' : 'ru-RU')
   const dateLocale = locale === 'en' ? 'en-US' : 'ru-RU'
@@ -49,9 +52,10 @@ export function PublicationsPage() {
 function PublicationRow({ item, selected, onToggle, formatter, locale, t }:{item:Publication;selected:boolean;onToggle:(id:string)=>void;formatter:Intl.NumberFormat;locale:string;t:(value:string)=>string}) {
   const date = new Intl.DateTimeFormat(locale, { day:'numeric', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit' }).format(new Date(item.publishedAt)).replace(',', '')
   const platform = platformNames[item.platform]
+  const permalink = safePublicationPermalink(item.platform, item.permalink)
   return <article className={`${styles.publicationRow} ${selected ? styles.selectedPublication : ''}`}>
     <label className={styles.check}><input type="checkbox" aria-label={`${t('Выбрать публикацию')} ${item.title || ''}`} checked={selected} onChange={() => onToggle(item.id)}/></label>
-    <a className={styles.publicationPreview} href={item.permalink || undefined} target={item.permalink ? '_blank' : undefined} rel="noreferrer" aria-label={item.title || t('Без названия')}>
+    <a className={styles.publicationPreview} href={permalink} target={permalink ? '_blank' : undefined} rel="noopener noreferrer" aria-label={item.title || t('Без названия')}>
       {item.thumbnailUrl ? <img src={item.thumbnailUrl} alt=""/> : <span>{platform.slice(0,1)}</span>}<i>{platform}</i>
     </a>
     <div className={styles.publicationText}><b>{item.title || t('Без названия')}</b><small>{item.companyName || t('Без компании')}</small></div>
@@ -61,7 +65,8 @@ function PublicationRow({ item, selected, onToggle, formatter, locale, t }:{item
 
 export function ContentGroupsPage() {
   const { locale, t } = useI18n()
-  const groups=useQuery({queryKey:['content-groups', locale],queryFn:api.contentGroups})
+  const { scopeKey } = useAccess()
+  const groups=useQuery({queryKey:['content-groups', scopeKey, locale],queryFn:api.contentGroups})
   return <Page title={t('Креативы')} eyebrow={t('СРАВНЕНИЕ')} description={t('Объединяйте один ролик, опубликованный на нескольких платформах.')}>{groups.isPending?<div className={styles.state}>{t('Загрузка…')}</div>:groups.data?.items.length?<div className={styles.list}>{groups.data.items.map(group=><article className={styles.row} key={group.id}><div><b>{group.name}</b><small>{group.creatorName}</small></div><strong>{group.publicationCount} {t('публикаций')}</strong><span>{t(group.status)}</span></article>)}</div>:<div className={styles.empty}><h2>{t('Креативов пока нет')}</h2><p>{t('После появления публикаций система покажет предложения совпадений. Объединение всегда подтверждает администратор.')}</p></div>}</Page>
 }
 
@@ -74,10 +79,14 @@ function formatDate(value: string | null, locale: 'ru'|'en', empty: string) {
 
 export function IntegrationsPage() {
   const { locale, t } = useI18n()
+  const { scopeKey, hasCapability } = useAccess()
+  const canManageSync = hasCapability('SYNC_MANAGE')
+  const canConnectSocials = hasCapability('SOCIAL_CONNECT')
   const [filter, setFilter] = useState<'ALL'|'PROBLEMS'|'HEALTHY'>('ALL')
   const [bulkOpen, setBulkOpen] = useState(false)
   const [bulkSelection, setBulkSelection] = useState<string[]>([])
-  const result = useQuery({ queryKey: ['integrations', locale], queryFn: api.integrations, refetchInterval: 60_000 })
+  const bulkDialogRef = useRef<HTMLElement>(null)
+  const result = useQuery({ queryKey: ['integrations', scopeKey, locale], queryFn: api.integrations, refetchInterval: 60_000 })
   const authorize = useMutation({ mutationFn: ({ creatorId, platform }: { creatorId:string; platform:Platform }) => api.startAuthorization(creatorId, platform), onSuccess: ({ authorizationUrl }) => window.location.assign(authorizationUrl) })
   const retrySync = useMutation({ mutationFn: api.requestPlatformSync, onSuccess: () => result.refetch() })
   const accounts = result.data?.accounts ?? []
@@ -86,7 +95,19 @@ export function IntegrationsPage() {
   const syncFailures = accounts.filter(account => account.health === 'WARNING').length
   const visible = accounts.filter(account => filter === 'ALL' || (filter === 'PROBLEMS' ? account.health === 'ERROR' || account.health === 'WARNING' : account.health === 'HEALTHY'))
   const selectedAccounts = problemAccounts.filter(account => bulkSelection.includes(account.id))
-  const toggleBulk = () => { setBulkSelection(problemAccounts.map(account => account.id)); setBulkOpen(true) }
+  const closeBulk = () => setBulkOpen(false)
+  useDialogFocus(bulkOpen && canConnectSocials, bulkDialogRef, closeBulk)
+  const toggleBulk = () => {
+    if (!canConnectSocials) return
+    setBulkSelection(problemAccounts.map(account => account.id))
+    setBulkOpen(true)
+  }
+  const retryAccount = (accountId: string) => {
+    if (canManageSync) retrySync.mutate(accountId)
+  }
+  const reconnectAccount = (creatorId: string, platform: Platform) => {
+    if (canConnectSocials) authorize.mutate({ creatorId, platform })
+  }
   const date = (value:string|null, empty = t('Ещё не запускалась')) => formatDate(value, locale, empty)
   const healthLabel = (health: SyncAccount['health']) => health === 'HEALTHY' ? t('Работает') : health === 'WARNING' ? t('Внимание') : health === 'ERROR' ? t('Ошибка') : t('Ожидает')
 
@@ -98,7 +119,7 @@ export function IntegrationsPage() {
           <article><span>{t('Работают')}</span><strong className={styles.healthyMetric}>{healthy}</strong><small>{t('без ошибок')}</small></article>
           <article><span>{t('Требуют внимания')}</span><strong className={problemAccounts.length ? styles.errorMetric : ''}>{problemAccounts.length}</strong><small>{syncFailures ? `${syncFailures} ${t('с ошибками синхронизации')}` : t('критичных проблем нет')}</small></article>
         </div>
-        <button className={styles.bulkButton} onClick={toggleBulk} disabled={!problemAccounts.length}>{t('Переподключить проблемные')}</button>
+        {canConnectSocials ? <button className={styles.bulkButton} onClick={toggleBulk} disabled={!problemAccounts.length}>{t('Переподключить проблемные')}</button> : null}
       </div>
       <div className={styles.syncPanel}>
         <div className={styles.syncPanelHead}>
@@ -115,18 +136,18 @@ export function IntegrationsPage() {
             <div className={styles.accountIdentity}><span className={`${styles.platformMark} ${styles[account.platform.toLowerCase()]}`}>{platformNames[account.platform].slice(0, 2)}</span><div><Link to={`/app/creators/${account.creatorId}`}>{account.creatorName}</Link><small>{platformNames[account.platform]} · @{account.username || account.displayName}</small></div></div>
             <div className={styles.healthCell}><span className={`${styles.healthBadge} ${styles[account.health.toLowerCase()]}`}><i />{healthLabel(account.health)}</span><small>{t(account.message)}</small></div>
             <div className={styles.syncTime}><strong>{date(account.lastSyncedAt)}</strong><small>{account.tokenExpiresAt ? `${t('Токен до')} ${date(account.tokenExpiresAt, '—')}` : t('Без срока действия')}</small></div>
-            <div className={styles.rowActions}>{account.health === 'WARNING' ? <button onClick={() => retrySync.mutate(account.id)} disabled={retrySync.isPending}>{retrySync.isPending && retrySync.variables === account.id ? t('Ставим в очередь…') : t('Повторить синхронизацию')}</button> : account.health === 'ERROR' ? <button onClick={() => authorize.mutate({ creatorId:account.creatorId, platform:account.platform })} disabled={authorize.isPending}>{authorize.isPending && authorize.variables?.creatorId === account.creatorId && authorize.variables.platform === account.platform ? t('Переходим…') : t('Переподключить')}</button> : <Link to={`/app/creators/${account.creatorId}`}>{t('Открыть')}</Link>}</div>
+            <div className={styles.rowActions}>{account.health === 'WARNING' ? canManageSync ? <button onClick={() => retryAccount(account.id)} disabled={retrySync.isPending}>{retrySync.isPending && retrySync.variables === account.id ? t('Ставим в очередь…') : t('Повторить синхронизацию')}</button> : null : account.health === 'ERROR' ? canConnectSocials ? <button onClick={() => reconnectAccount(account.creatorId, account.platform)} disabled={authorize.isPending}>{authorize.isPending && authorize.variables?.creatorId === account.creatorId && authorize.variables.platform === account.platform ? t('Переходим…') : t('Переподключить')}</button> : null : <Link to={`/app/creators/${account.creatorId}`}>{t('Открыть')}</Link>}</div>
           </article>)}
         </div> : <div className={styles.syncEmpty}><h2>{accounts.length ? t('По этому фильтру ничего нет') : t('Подключений пока нет')}</h2><p>{accounts.length ? t('Выберите другой статус подключения.') : t('Подключите платформу в карточке креатора — аккаунт сразу появится в мониторинге.')}</p>{!accounts.length ? <Link to="/app/creators">{t('Перейти к креаторам')}</Link> : null}</div>}
       </div>
       <div className={styles.providerStrip}>{result.data.items.map(platform => <div key={platform.id}><span>{t(platform.name)}</span><strong>{platform.connectedAccounts}</strong><small>{platform.configured ? t('OAuth настроен') : t('OAuth не настроен')}</small></div>)}</div>
     </>}
-    {bulkOpen ? <div className={styles.bulkBackdrop} onMouseDown={() => setBulkOpen(false)}>
-      <section className={styles.bulkDialog} onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="bulk-title">
-        <header><div><p>{t('МАССОВОЕ ДЕЙСТВИЕ')}</p><h2 id="bulk-title">{t('Переподключение аккаунтов')}</h2></div><button aria-label={t('Закрыть')} onClick={() => setBulkOpen(false)}>×</button></header>
+    {bulkOpen && canConnectSocials ? <div className={styles.bulkBackdrop} onMouseDown={closeBulk}>
+      <section ref={bulkDialogRef} className={styles.bulkDialog} onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="bulk-title" tabIndex={-1}>
+        <header><div><p>{t('МАССОВОЕ ДЕЙСТВИЕ')}</p><h2 id="bulk-title">{t('Переподключение аккаунтов')}</h2></div><button aria-label={t('Закрыть')} onClick={closeBulk}>×</button></header>
         <p className={styles.bulkLead}>{t('OAuth требует подтверждения каждой платформы. Пройдите проблемные аккаунты по очереди — завершённые подключения исчезнут из списка.')}</p>
         <div className={styles.bulkList}>{problemAccounts.map(account => <label key={account.id}><input type="checkbox" checked={bulkSelection.includes(account.id)} onChange={() => setBulkSelection(current => current.includes(account.id) ? current.filter(id => id !== account.id) : [...current, account.id])}/><span><b>{account.creatorName}</b><small>{platformNames[account.platform]} · {t(account.message)}</small></span></label>)}</div>
-        <footer><span>{t('Выбрано:')} {selectedAccounts.length}</span><button onClick={() => { const first = selectedAccounts[0]; if (first) authorize.mutate({ creatorId:first.creatorId, platform:first.platform }) }} disabled={!selectedAccounts.length || authorize.isPending}>{authorize.isPending ? t('Открываем OAuth…') : t('Начать с первого')}</button></footer>
+        <footer><span>{t('Выбрано:')} {selectedAccounts.length}</span><button onClick={() => { const first = selectedAccounts[0]; if (first) reconnectAccount(first.creatorId, first.platform) }} disabled={!selectedAccounts.length || authorize.isPending}>{authorize.isPending ? t('Открываем OAuth…') : t('Начать с первого')}</button></footer>
       </section>
     </div> : null}
   </Page>
@@ -134,7 +155,8 @@ export function IntegrationsPage() {
 
 export function SystemPage() {
   const { locale, t } = useI18n()
-  const health=useQuery({queryKey:['sync-health', locale],queryFn:api.syncHealth})
+  const { scopeKey } = useAccess()
+  const health=useQuery({queryKey:['sync-health', scopeKey, locale],queryFn:api.syncHealth})
   return <Page title={t('Система')} eyebrow={t('АДМИНИСТРИРОВАНИЕ')} description={t('Состояние синхронизации и очередей.')}><div className={styles.cards}><article><span>{t('Статус scheduler')}</span><strong>{health.data?.status === 'healthy' ? t('В норме') : t('Проверка')}</strong></article><article><span>{t('Задач ожидает')}</span><strong>{health.data?.dueTargets ?? '—'}</strong></article></div></Page>
 }
 

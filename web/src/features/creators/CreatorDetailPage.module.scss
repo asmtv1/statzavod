@@ -213,6 +213,10 @@ button:disabled {
 .profileSummary a {
   color: #bcefd0;
 }
+.approvalPolicy { gap: .9rem; }
+.policyRows { display: grid; gap: .55rem; margin-top: 1rem; }
+.policyRows label { display: flex; align-items: center; gap: .65rem; padding: .7rem .8rem; background: rgb(0 0 0 / 12%); border: 1px solid rgb(244 235 218 / 8%); border-radius: .65rem; cursor: pointer; font-size: .86rem; }
+.policyRows input { accent-color: var(--gold); width: 1rem; height: 1rem; }
 .workForm { display: grid; gap: .85rem; margin-top: 1rem; }
 .workForm label { display: grid; gap: .4rem; color: var(--text); font-size: .8rem; font-weight: 650; }
 .workForm textarea { width: 100%; color: var(--text); background: #181a1a; border: 1px solid var(--border); border-radius: .5rem; padding: .65rem .7rem; resize: vertical; font: inherit; }
@@ -377,6 +381,7 @@ button:disabled {
   color: #77746e !important;
   font-weight: 500 !important;
 }
+.notice { margin:0; padding:.8rem; border:1px solid rgb(229 184 106 / 22%); border-radius:.65rem; background:rgb(229 184 106 / 8%); color:#e8c879; font-size:.8rem; line-height:1.45; }
 .filters {
   display: flex;
   gap: 0.75rem;

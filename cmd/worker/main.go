@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"github.com/statzavod/statzavod/internal/config"
 	"github.com/statzavod/statzavod/internal/database"
 	httpserver "github.com/statzavod/statzavod/internal/transport/http"
 	"log"
+	"os"
 	"time"
 )
 
@@ -22,7 +24,38 @@ func main() {
 	server := httpserver.New(pool, cfg)
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
+	workerID := makeWorkerID()
 	for {
+		mediaCtx, cancelMedia := context.WithTimeout(context.Background(), 10*time.Minute)
+		validated, mediaErr := server.RunMediaValidation(mediaCtx, workerID, 1)
+		cancelMedia()
+		if mediaErr != nil {
+			log.Printf("media validation (%d processed): %v", validated, mediaErr)
+		}
+		cleanupCtx, cancelCleanup := context.WithTimeout(context.Background(), 2*time.Minute)
+		cleaned, cleanupErr := server.RunMediaCleanup(cleanupCtx, workerID, 20)
+		cancelCleanup()
+		if cleanupErr != nil {
+			log.Printf("media cleanup (%d processed): %v", cleaned, cleanupErr)
+		}
+
+		publishCtx, cancelPublish := context.WithTimeout(context.Background(), 5*time.Minute)
+		published, publishErr := server.RunContentPublish(publishCtx, workerID, 10)
+		cancelPublish()
+		if publishErr != nil {
+			log.Printf("content publish (%d processed): %v", published, publishErr)
+		}
+		if _, err := server.ExpireContentReauth(context.Background()); err != nil {
+			log.Printf("content reauth expiry: %v", err)
+		}
+
+		lifecycleCtx, cancelLifecycle := context.WithTimeout(context.Background(), 2*time.Minute)
+		purged, lifecycleErr := server.RunLifecycle(lifecycleCtx, workerID, 20)
+		cancelLifecycle()
+		if lifecycleErr != nil {
+			log.Printf("lifecycle purge (%d processed): %v", purged, lifecycleErr)
+		}
+
 		refreshCtx, cancelRefresh := context.WithTimeout(context.Background(), 2*time.Minute)
 		refreshed, refreshErr := server.RunOAuthTokenRefresh(refreshCtx, 50)
 		cancelRefresh()
@@ -41,4 +74,8 @@ func main() {
 		}
 		<-ticker.C
 	}
+}
+
+func makeWorkerID() string {
+	return fmt.Sprintf("worker-%d-%d", os.Getpid(), time.Now().UnixNano())
 }
