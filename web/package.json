@@ -12,31 +12,31 @@
     "check:i18n": "node scripts/check-i18n.mjs"
   },
   "dependencies": {
-    "@tanstack/react-query": "^5.90.20",
+    "@tanstack/react-query": "^5.102.8",
     "echarts": "^6.0.0",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
-    "react-router-dom": "7.18.2",
-    "zustand": "^5.0.11"
+    "react-router-dom": "7.18.3",
+    "zustand": "^5.0.15"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@playwright/test": "^1.62.1",
-    "@vitejs/plugin-react": "^5.1.1",
-    "@testing-library/jest-dom": "^6.9.1",
-    "@testing-library/react": "^16.3.2",
-    "@testing-library/user-event": "^14.6.4",
-    "@types/react": "^19.2.14",
-    "@types/react-dom": "^19.2.3",
-    "eslint": "^10.8.1",
+    "@playwright/test": "^1.63.0",
+    "@vitejs/plugin-react": "^6.1.1",
+    "@testing-library/jest-dom": "^7.0.1",
+    "@testing-library/react": "^16.3.3",
+    "@testing-library/user-event": "^14.6.7",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.7",
+    "eslint": "^10.10.0",
     "eslint-plugin-react-hooks": "^7.1.1",
-    "eslint-plugin-react-refresh": "^0.5.4",
-    "globals": "^17.11.0",
-    "jsdom": "^29.1.1",
-    "sass": "^1.97.2",
-    "typescript": "^5.9.3",
-    "typescript-eslint": "^8.67.0",
-    "vite": "^7.3.1",
-    "vitest": "^4.1.10"
+    "eslint-plugin-react-refresh": "^0.5.6",
+    "globals": "^17.12.0",
+    "jsdom": "^30.0.1",
+    "sass": "^1.104.0",
+    "typescript": "^7.0.2",
+    "typescript-eslint": "^8.70.0",
+    "vite": "^8.2.2",
+    "vitest": "^5.0.0"
   }
 }
